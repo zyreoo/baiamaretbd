@@ -683,6 +683,11 @@ export default function Dashboard({ profile, onLogout }) {
 
   // Load recent activity feed once on mount.
   useEffect(() => {
+    if (!db) {
+      setActivities([])
+      setActivitiesLoading(false)
+      return
+    }
     let cancelled = false
     ;(async () => {
       try {
@@ -707,7 +712,7 @@ export default function Dashboard({ profile, onLogout }) {
   // Count pending incoming friend requests for the badge.
   useEffect(() => {
     const uid = profile?.userId
-    if (!uid) return
+    if (!uid || !db) return
     let cancelled = false
     ;(async () => {
       try {
@@ -757,7 +762,7 @@ export default function Dashboard({ profile, onLogout }) {
   async function handleSelectTopic(topic) {
     setSelectedTopic(topic)
     setLessonState(null)
-    if (profile?._docId) {
+    if (profile?._docId && db) {
       try {
         await updateDoc(doc(db, 'learner_profiles', profile._docId), {
           selectedClass,
@@ -793,17 +798,19 @@ export default function Dashboard({ profile, onLogout }) {
       }
 
       // Optionally save to Firestore
-      try {
-        await addDoc(collection(db, 'generated_lessons'), {
-          uid: profile?.userId || profile?.username || 'anonymous',
-          selectedClass,
-          selectedSubject,
-          selectedTopic,
-          lesson: data.lesson,
-          createdAt: serverTimestamp(),
-        })
-      } catch (err) {
-        console.warn('Lesson Firestore save skipped:', err.message)
+      if (db) {
+        try {
+          await addDoc(collection(db, 'generated_lessons'), {
+            uid: profile?.userId || profile?.username || 'anonymous',
+            selectedClass,
+            selectedSubject,
+            selectedTopic,
+            lesson: data.lesson,
+            createdAt: serverTimestamp(),
+          })
+        } catch (err) {
+          console.warn('Lesson Firestore save skipped:', err.message)
+        }
       }
 
       setLessonState({ status: 'ready', lesson: data.lesson })

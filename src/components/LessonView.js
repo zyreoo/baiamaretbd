@@ -1082,47 +1082,51 @@ export default function LessonView({
     setConfettiKey((k) => k + 1)
 
     // Activity log for "friends are learning" feed (best-effort).
-    ;(async () => {
-      try {
-        await addDoc(collection(db, 'activities'), {
-          uid: profile?.userId || profile?.username || 'anonymous',
-          username: profile?.username || 'Someone',
-          type: 'lesson_completed',
-          selectedClass,
-          selectedSubject,
-          selectedTopic,
-          xpEarned: totalEarned,
-          createdAt: serverTimestamp(),
-        })
-      } catch (err) {
-        console.warn('activities Firestore save skipped:', err.message)
-      }
-    })()
+    if (db) {
+      ;(async () => {
+        try {
+          await addDoc(collection(db, 'activities'), {
+            uid: profile?.userId || profile?.username || 'anonymous',
+            username: profile?.username || 'Someone',
+            type: 'lesson_completed',
+            selectedClass,
+            selectedSubject,
+            selectedTopic,
+            xpEarned: totalEarned,
+            createdAt: serverTimestamp(),
+          })
+        } catch (err) {
+          console.warn('activities Firestore save skipped:', err.message)
+        }
+      })()
+    }
 
-    ;(async () => {
-      try {
-        await addDoc(collection(db, 'lesson_progress'), {
-          uid: profile?.userId || profile?.username || 'anonymous',
-          selectedClass,
-          selectedSubject,
-          selectedTopic,
-          xpEarned: currentXp,
-          bonusXpEarned: finalBonus,
-          totalXpEarned: totalEarned,
-          totalXp,
-          percentage,
-          confidence,
-          badge,
-          achievementBadges,
-          correctAnswers,
-          wrongAnswers,
-          difficultyMode,
-          completedAt: serverTimestamp(),
-        })
-      } catch (err) {
-        console.warn('lesson_progress Firestore save skipped:', err.message)
-      }
-    })()
+    if (db) {
+      ;(async () => {
+        try {
+          await addDoc(collection(db, 'lesson_progress'), {
+            uid: profile?.userId || profile?.username || 'anonymous',
+            selectedClass,
+            selectedSubject,
+            selectedTopic,
+            xpEarned: currentXp,
+            bonusXpEarned: finalBonus,
+            totalXpEarned: totalEarned,
+            totalXp,
+            percentage,
+            confidence,
+            badge,
+            achievementBadges,
+            correctAnswers,
+            wrongAnswers,
+            difficultyMode,
+            completedAt: serverTimestamp(),
+          })
+        } catch (err) {
+          console.warn('lesson_progress Firestore save skipped:', err.message)
+        }
+      })()
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase])
 

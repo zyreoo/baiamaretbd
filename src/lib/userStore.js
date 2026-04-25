@@ -10,7 +10,7 @@ import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore'
  * Uses merge:true so it never overwrites passwordHash or username.
  */
 export async function syncUserSnapshot(userId, username, snapshot = {}) {
-  if (!userId) return
+  if (!userId || !db) return
   try {
     // Compute level server-side-free: import inline to avoid circular deps.
     const { getLevel } = await import('./progressStore')
@@ -39,7 +39,7 @@ export async function syncUserSnapshot(userId, username, snapshot = {}) {
  * Returns null on any error.
  */
 export async function getUserSnapshot(userId) {
-  if (!userId) return null
+  if (!userId || !db) return null
   try {
     const snap = await getDoc(doc(db, 'users', userId))
     return snap.exists() ? { id: snap.id, ...snap.data() } : null

@@ -88,7 +88,12 @@ export default function FriendsScreen({ profile }) {
   // ─ Load all requests + friend user snapshots ────────────────────────────────
 
   async function loadRequests() {
-    if (!myUid) return
+    if (!myUid || !db) {
+      setRequests([])
+      setFriendSnapshots({})
+      setLoading(false)
+      return
+    }
     setLoading(true)
     try {
       // Two separate queries (avoids composite index requirement).
@@ -174,6 +179,10 @@ export default function FriendsScreen({ profile }) {
     setSearchResult(null)
     setAddFeedback('')
     try {
+      if (!db) {
+        setSearchResult('error')
+        return
+      }
       const snap = await getDocs(
         query(collection(db, 'users'), where('username', '==', q), limit(1)),
       )
@@ -198,6 +207,10 @@ export default function FriendsScreen({ profile }) {
 
   async function handleSendRequest() {
     if (!searchResult || typeof searchResult !== 'object') return
+    if (!db) {
+      setAddFeedback('Friends are unavailable until Firebase is configured.')
+      return
+    }
     const { uid: toUid, username: toUsername } = searchResult
 
     // Check not already friends / request pending.
@@ -236,6 +249,7 @@ export default function FriendsScreen({ profile }) {
   // ─ Accept / Reject ──────────────────────────────────────────────────────────
 
   async function handleAccept(requestId) {
+    if (!db) return
     try {
       await updateDoc(doc(db, 'friend_requests', requestId), { status: 'accepted' })
       await loadRequests()
@@ -245,6 +259,7 @@ export default function FriendsScreen({ profile }) {
   }
 
   async function handleReject(requestId) {
+    if (!db) return
     try {
       await updateDoc(doc(db, 'friend_requests', requestId), { status: 'rejected' })
       await loadRequests()
