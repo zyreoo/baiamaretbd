@@ -1,66 +1,63 @@
-import Image from "next/image";
-import styles from "./page.module.css";
+'use client'
+
+import { useState } from 'react'
+import { AnimatePresence } from 'framer-motion'
+import LoginScreen from '@/components/LoginScreen'
+import OnboardingChat from '@/components/OnboardingChat'
+import ProfileCard from '@/components/ProfileCard'
+import { generateProfile } from '@/lib/generateProfile'
+import { db } from '@/lib/firebase'
+import { collection, addDoc } from 'firebase/firestore'
+
+const SCREENS = {
+  LOGIN: 'login',
+  CHAT: 'chat',
+  PROFILE: 'profile',
+}
 
 export default function Home() {
+  const [screen, setScreen] = useState(SCREENS.LOGIN)
+  const [username, setUsername] = useState('')
+  const [profile, setProfile] = useState(null)
+
+  function handleLogin(name) {
+    setUsername(name)
+    setScreen(SCREENS.CHAT)
+  }
+
+  async function handleChatComplete(answers) {
+    const generated = generateProfile(username, answers)
+    setProfile(generated)
+
+    try {
+      await addDoc(collection(db, 'learner_profiles'), {
+        ...generated,
+        createdAt: new Date(),
+      })
+    } catch (err) {
+      console.warn('Firestore save skipped (check env vars):', err.message)
+    }
+
+    setScreen(SCREENS.PROFILE)
+  }
+
+  function handleStartLearning() {
+    alert(`Welcome, ${profile?.username}! Your learning journey starts here. 🎉`)
+  }
+
   return (
-    <div className={styles.page}>
-      <main className={styles.main}>
-        <Image
-          className={styles.logo}
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className={styles.intro}>
-          <h1>To get started, edit the page.js file.</h1>
-          <p>
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className={styles.ctas}>
-          <a
-            className={styles.primary}
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className={styles.logo}
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className={styles.secondary}
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
-    </div>
-  );
+    <main>
+      <AnimatePresence mode="wait">
+        {screen === SCREENS.LOGIN && (
+          <LoginScreen key="login" onContinue={handleLogin} />
+        )}
+        {screen === SCREENS.CHAT && (
+          <OnboardingChat key="chat" username={username} onComplete={handleChatComplete} />
+        )}
+        {screen === SCREENS.PROFILE && profile && (
+          <ProfileCard key="profile" profile={profile} onStartLearning={handleStartLearning} />
+        )}
+      </AnimatePresence>
+    </main>
+  )
 }
