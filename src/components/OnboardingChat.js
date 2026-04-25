@@ -4,31 +4,26 @@ import { useState, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import ChatBubble from './ChatBubble'
 import TypingIndicator from './TypingIndicator'
-
-const QUESTIONS = [
-  "What subjects or activities do you naturally enjoy?",
-  "What kind of tasks usually feel boring or stressful?",
-  "When learning something new, do you prefer images, examples, practice, stories, or short explanations?",
-  "What motivates you more: goals, curiosity, rewards, competition, or helping others?",
-  "How do you usually work best: slowly and carefully, fast, last-minute, or consistently?",
-  "When something is hard, do you prefer hints, full explanations, examples, or trying again?",
-]
-
-const WARM_RESPONSES = [
-  "Nice, that tells me a lot.",
-  "Got it. I'll keep that in mind.",
-  "That helps me understand your learning rhythm.",
-  "Interesting — I'm noting that.",
-  "Perfect. I'm starting to see your style.",
-  "Perfect. I'm building your profile now.",
-]
+import {
+  estimateRemainingQuestions,
+  getInitialQuestionId,
+  getNextQuestionId,
+  getQuestionById,
+  getQuestionPrompt,
+  getWarmReply,
+} from '@/lib/onboardingFlow'
 
 export default function OnboardingChat({ username, onComplete }) {
   const [messages, setMessages] = useState([])
   const [currentAnswer, setCurrentAnswer] = useState('')
   const [questionIndex, setQuestionIndex] = useState(0)
+  const [totalQuestionsEstimate, setTotalQuestionsEstimate] = useState(7)
+  const [currentQuestionId, setCurrentQuestionId] = useState(getInitialQuestionId())
   const [isTyping, setIsTyping] = useState(false)
-  const [answers, setAnswers] = useState([])
+  const [profileDraft, setProfileDraft] = useState({
+    username,
+    responses: [],
+  })
   const [inputLocked, setInputLocked] = useState(true)
   const bottomRef = useRef(null)
   const inputRef = useRef(null)
@@ -37,13 +32,19 @@ export default function OnboardingChat({ username, onComplete }) {
     let isCancelled = false
 
     const greet = async () => {
+      const initialQuestionId = getInitialQuestionId()
       await delay(500)
       if (isCancelled) return
       setIsTyping(true)
       await delay(900)
       if (isCancelled) return
       setIsTyping(false)
-      setMessages([{ role: 'ai', text: `Hey ${username}! I want to understand what kind of learner you are.` }])
+      setMessages((prev) => {
+        const greeting = `Hey ${username}! I want to understand what kind of learner you are.`
+        if (prev.some((msg) => msg.role === 'ai' && msg.text === greeting)) return prev
+        if (prev.length === 0) return [{ role: 'ai', text: greeting }]
+        return [...prev, { role: 'ai', text: greeting }]
+      })
       await delay(300)
       if (isCancelled) return
       setIsTyping(true)
@@ -51,9 +52,13 @@ export default function OnboardingChat({ username, onComplete }) {
       if (isCancelled) return
       setIsTyping(false)
       setMessages((prev) => {
-        if (prev.some((msg) => msg.role === 'ai' && msg.text === QUESTIONS[0])) return prev
-        return [...prev, { role: 'ai', text: QUESTIONS[0] }]
+        const initialPrompt = getQuestionPrompt(initialQuestionId, { username, responses: [] })
+        if (!initialPrompt) return prev
+        if (prev.some((msg) => msg.role === 'ai' && msg.text === initialPrompt)) return prev
+        return [...prev, { role: 'ai', text: initialPrompt }]
       })
+      const remaining = estimateRemainingQuestions(getInitialQuestionId(), { responses: [] })
+      setTotalQuestionsEstimate(remaining)
       setInputLocked(false)
     }
     greet()
@@ -88,16 +93,29 @@ export default function OnboardingChat({ username, onComplete }) {
     const userMsg = { role: 'user', text: trimmed }
     setMessages((prev) => [...prev, userMsg])
 
-    const newAnswers = [...answers, trimmed]
-    setAnswers(newAnswers)
+    const currentQuestion = getQuestionById(currentQuestionId)
+    const askedPrompt = getQuestionPrompt(currentQuestionId, profileDraft)
+    const nextProfileDraft = {
+      ...profileDraft,
+      [currentQuestion?.key || `answer_${questionIndex}`]: trimmed,
+      responses: [
+        ...profileDraft.responses,
+        {
+          questionId: currentQuestionId,
+          question: askedPrompt || currentQuestion?.prompt || '',
+          answer: trimmed,
+        },
+      ],
+    }
+    setProfileDraft(nextProfileDraft)
 
     await delay(400)
     setIsTyping(true)
 
-    const isLast = questionIndex === QUESTIONS.length - 1
-    const warmReply = WARM_RESPONSES[questionIndex]
+    const warmReply = getWarmReply(questionIndex)
+    const nextQuestionId = getNextQuestionId(currentQuestionId, nextProfileDraft, trimmed)
 
-    if (isLast) {
+    if (!nextQuestionId) {
       await delay(1200)
       setIsTyping(false)
       setMessages((prev) => [...prev, { role: 'ai', text: warmReply }])
@@ -107,7 +125,7 @@ export default function OnboardingChat({ username, onComplete }) {
       setIsTyping(false)
       setMessages((prev) => [...prev, { role: 'ai', text: "Give me a second while I put together your profile…" }])
       await delay(1400)
-      onComplete(newAnswers)
+      onComplete(nextProfileDraft)
     } else {
       await delay(1000)
       setIsTyping(false)
@@ -116,9 +134,19 @@ export default function OnboardingChat({ username, onComplete }) {
       setIsTyping(true)
       await delay(900)
       setIsTyping(false)
+      const nextQuestion = getQuestionById(nextQuestionId)
+      if (nextQuestion) {
+        const nextPrompt = getQuestionPrompt(nextQuestionId, nextProfileDraft)
+        setMessages((prev) => {
+          if (!nextPrompt) return prev
+          if (prev.some((msg) => msg.role === 'ai' && msg.text === nextPrompt)) return prev
+          return [...prev, { role: 'ai', text: nextPrompt }]
+        })
+      }
       const nextIndex = questionIndex + 1
-      setMessages((prev) => [...prev, { role: 'ai', text: QUESTIONS[nextIndex] }])
+      setCurrentQuestionId(nextQuestionId)
       setQuestionIndex(nextIndex)
+      setTotalQuestionsEstimate(nextIndex + estimateRemainingQuestions(nextQuestionId, nextProfileDraft))
       setInputLocked(false)
     }
   }
@@ -142,7 +170,7 @@ export default function OnboardingChat({ username, onComplete }) {
         </div>
         <div className="ml-auto">
           <div className="text-[12px] text-[#8e8e93] bg-[#f0f0f5] px-2.5 py-1 rounded-full">
-            {Math.min(questionIndex + 1, QUESTIONS.length)}/{QUESTIONS.length}
+            {Math.min(questionIndex + 1, totalQuestionsEstimate)}/{totalQuestionsEstimate}
           </div>
         </div>
       </div>
@@ -151,7 +179,7 @@ export default function OnboardingChat({ username, onComplete }) {
       <div className="h-0.5 bg-[#e8e8ed]">
         <motion.div
           className="h-full bg-gradient-to-r from-[#007AFF] to-[#5856D6]"
-          animate={{ width: `${(Math.min(questionIndex + 1, QUESTIONS.length) / QUESTIONS.length) * 100}%` }}
+          animate={{ width: `${(Math.min(questionIndex + 1, totalQuestionsEstimate) / totalQuestionsEstimate) * 100}%` }}
           transition={{ duration: 0.5, ease: 'easeOut' }}
         />
       </div>

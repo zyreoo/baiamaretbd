@@ -3,6 +3,21 @@ function detectKeywords(text, keywords) {
   return keywords.some((kw) => lower.includes(kw))
 }
 
+function normalizeOnboardingInput(input) {
+  if (Array.isArray(input)) {
+    return {
+      allAnswers: input,
+      structured: {},
+    }
+  }
+
+  const responses = Array.isArray(input?.responses) ? input.responses : []
+  return {
+    allAnswers: responses.map((entry) => entry.answer).filter(Boolean),
+    structured: input || {},
+  }
+}
+
 function detectLearningStyle(answers) {
   const allText = answers.join(' ')
 
@@ -94,11 +109,13 @@ function generateSummary(type, style, motivation, pace) {
   return templates[type] || `You have a unique way of learning that blends multiple styles. Stay open to trying different approaches and notice what makes ideas stick for you.`
 }
 
-export function generateProfile(username, answers) {
+export function generateProfile(username, onboardingInput) {
+  const { allAnswers, structured } = normalizeOnboardingInput(onboardingInput)
+  const answers = allAnswers.length > 0 ? allAnswers : ['']
   const { style, type } = detectLearningStyle(answers)
   const motivation = detectMotivation(answers)
-  const pace = detectPace(answers[4] || answers.join(' '))
-  const support = detectSupport(answers[5] || answers.join(' '))
+  const pace = detectPace(answers[4] || structured.goals || answers.join(' '))
+  const support = detectSupport(structured.support_style_signal || answers[5] || answers.join(' '))
   const strengths = deriveStrengths(type, style, motivation)
   const challenges = deriveChallenges(type, pace, support)
   const summary = generateSummary(type, style, motivation, pace)
@@ -113,6 +130,13 @@ export function generateProfile(username, answers) {
     strengths,
     challenges,
     summary,
+    age: structured.age || null,
+    education_stage: structured.education_stage || null,
+    school_class: structured.school_class || null,
+    university_year: structured.university_year || null,
+    interests: structured.interests || null,
+    goals: structured.goals || null,
+    onboarding_responses: structured.responses || [],
     createdAt: new Date(),
   }
 }

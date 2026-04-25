@@ -67,8 +67,8 @@ export default function Home() {
     setScreen(SCREENS.CHAT)
   }
 
-  async function handleChatComplete(answers) {
-    const generated = generateProfile(username, answers)
+  async function handleChatComplete(onboardingData) {
+    const generated = generateProfile(username, onboardingData)
     setProfile(generated)
 
     try {
