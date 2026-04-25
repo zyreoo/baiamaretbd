@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 
 const HACKCLUB_API = 'https://ai.hackclub.com/proxy/v1/chat/completions'
 const MODEL = 'qwen/qwen3-32b'
+const AI_TIMEOUT_MS = 12000
 
 function buildSystemPrompt({ profile, selectedClass, selectedSubject, selectedTopic, lesson }) {
   const style = profile?.learning_style || 'mixed'
@@ -26,9 +27,11 @@ Rules:
 }
 
 export async function POST(request) {
+  let parsedBody = {}
+  let timeoutId = null
   try {
-    const body = await request.json()
-    const { profile, selectedClass, selectedSubject, selectedTopic, lesson, question } = body
+    parsedBody = await request.json()
+    const { profile, selectedClass, selectedSubject, selectedTopic, lesson, question } = parsedBody
 
     if (!question || !selectedTopic) {
       return NextResponse.json({ error: 'Missing question or topic.' }, { status: 400 })
@@ -41,15 +44,18 @@ export async function POST(request) {
       })
     }
 
+    const controller = new AbortController()
+    timeoutId = setTimeout(() => controller.abort(), AI_TIMEOUT_MS)
+
     const aiResponse = await fetch(HACKCLUB_API, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
       },
+      signal: controller.signal,
       body: JSON.stringify({
         model: MODEL,
-        stream: true,
         messages: [
           {
             role: 'system',
@@ -57,9 +63,11 @@ export async function POST(request) {
           },
           { role: 'user', content: question.trim().slice(0, 600) },
         ],
-        temperature: 0.5,
+        temperature: 0.35,
+        max_tokens: 220,
       }),
     })
+    clearTimeout(timeoutId)
 
     if (!aiResponse.ok) {
       const errText = await aiResponse.text()
@@ -69,12 +77,28 @@ export async function POST(request) {
       })
     }
 
-    const aiData = await aiResponse.json()
-    const raw = aiData?.choices?.[0]?.message?.content || ''
+    const rawResponseText = await aiResponse.text()
+    let raw = ''
+    try {
+      const aiData = JSON.parse(rawResponseText)
+      raw = aiData?.choices?.[0]?.message?.content || ''
+    } catch {
+      console.warn('ask-tutor returned non-JSON payload. Raw head:', rawResponseText.slice(0, 120))
+      return NextResponse.json({
+        answer: `Let's keep it simple: ${selectedTopic} becomes easier when we break it into one tiny step at a time.`,
+      })
+    }
     const answer = raw.replace(/^```[\s\S]*?\n/, '').replace(/```$/, '').trim()
 
     return NextResponse.json({ answer: answer || `Let's stay focused on ${selectedTopic} — what part is unclear?` })
   } catch (err) {
+    if (timeoutId) clearTimeout(timeoutId)
+    if (err?.name === 'AbortError') {
+      const selectedTopic = parsedBody?.selectedTopic || 'this topic'
+      return NextResponse.json({
+        answer: `Quick version: focus on one basic idea in ${selectedTopic}, then test yourself with one tiny question.`,
+      })
+    }
     console.error('ask-tutor route error:', err)
     return NextResponse.json({ error: err.message }, { status: 500 })
   }

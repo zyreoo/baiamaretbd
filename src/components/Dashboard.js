@@ -19,7 +19,7 @@ import LessonView from './LessonView'
 import BottomNav from './BottomNav'
 import FriendsScreen from './FriendsScreen'
 import HistoryScreen from './HistoryScreen'
-import { DAILY_GOAL_XP, getProgress } from '@/lib/progressStore'
+import { DAILY_GOAL_XP, getLevelProgress, getProgress } from '@/lib/progressStore'
 
 // ─── Curriculum data ───────────────────────────────────────────────────────────
 
@@ -921,43 +921,121 @@ export default function Dashboard({ profile, onLogout }) {
                 </span>
               </motion.div>
 
-              {/* Daily progress / streak / total XP overview */}
-              <motion.div
-                initial={{ opacity: 0, y: 12 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.15, duration: 0.45 }}
-                className="bg-white rounded-3xl p-5 shadow-[0_2px_12px_rgba(0,0,0,0.06)]"
-              >
-                <div className="flex items-center justify-between mb-3">
-                  <div>
-                    <p className="text-[11px] font-semibold tracking-widest uppercase text-[#8e8e93]">Daily goal</p>
-                    <p className="text-[15px] font-bold text-[#1a1a1a] mt-0.5">{progress.dailyXp} / {DAILY_GOAL_XP} XP</p>
-                  </div>
-                  <div className="flex gap-2">
-                    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-[#fff3e8] text-[12px] font-bold text-[#c66800]">
-                      🔥 {progress.streak}
-                    </span>
-                    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-gradient-to-r from-[#e8f4ff] to-[#ede8ff] text-[12px] font-bold text-[#5856D6]">
-                      ⚡ {progress.totalXp}
-                    </span>
-                  </div>
-                </div>
-                <div className="h-2 bg-[#eef0f4] rounded-full overflow-hidden">
+              {/* ── Level + XP overview card ── */}
+              {(() => {
+                const lvlProg = getLevelProgress(progress.totalXp || 0)
+                const dailyPct = Math.min(100, Math.round(((progress.dailyXp || 0) / DAILY_GOAL_XP) * 100))
+                const subjectEntries = Object.entries(progress.subjectXp || {})
+                const SUBJECT_COLORS = {
+                  Mathematics: '#5856D6',
+                  Science: '#34c759',
+                  Physics: '#FF9F0A',
+                  Chemistry: '#FF375F',
+                  Biology: '#30D158',
+                  English: '#007AFF',
+                  History: '#BF5AF2',
+                  Geography: '#32ADE6',
+                }
+                return (
                   <motion.div
-                    className="h-full bg-gradient-to-r from-[#34c759] to-[#30b454] rounded-full"
-                    initial={{ width: 0 }}
-                    animate={{ width: `${Math.min(100, Math.round((progress.dailyXp / DAILY_GOAL_XP) * 100))}%` }}
-                    transition={{ duration: 0.6, ease: 'easeOut' }}
-                  />
-                </div>
-                {progress.lastTopic && (
-                  <p className="text-[12px] text-[#8e8e93] mt-3">
-                    Last lesson: <span className="text-[#1a1a1a] font-semibold">{progress.lastTopic}</span>
-                    {progress.lastSubject ? ` · ${progress.lastSubject}` : ''}
-                    {progress.lastClass ? ` · ${progress.lastClass}` : ''}
-                  </p>
-                )}
-              </motion.div>
+                    initial={{ opacity: 0, y: 12 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: 0.15, duration: 0.45 }}
+                    className="space-y-3"
+                  >
+                    {/* Level card */}
+                    <div className="bg-gradient-to-br from-[#5856D6] via-[#7c6cff] to-[#a78bfa] rounded-3xl p-5 shadow-[0_8px_28px_rgba(88,86,214,0.3)] text-white">
+                      <div className="flex items-start justify-between mb-4">
+                        <div>
+                          <p className="text-[11px] font-bold tracking-widest uppercase text-white/70">Your level</p>
+                          <p className="text-[42px] font-bold tracking-tight leading-none mt-1">{lvlProg.level}</p>
+                        </div>
+                        <div className="flex flex-col items-end gap-1.5 mt-1">
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-white/20 text-[12px] font-bold">
+                            🔥 {progress.streak} day streak
+                          </span>
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-white/20 text-[12px] font-bold">
+                            ⚡ {progress.totalXp} total XP
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* XP to next level bar */}
+                      <div className="mb-1.5">
+                        <div className="flex justify-between text-[11px] font-semibold text-white/80 mb-1.5">
+                          <span>{lvlProg.currentLevelXp} XP</span>
+                          <span>{lvlProg.xpNeeded - lvlProg.currentLevelXp} XP to Level {lvlProg.level + 1}</span>
+                        </div>
+                        <div className="h-2.5 bg-white/20 rounded-full overflow-hidden">
+                          <motion.div
+                            className="h-full bg-white rounded-full"
+                            initial={{ width: 0 }}
+                            animate={{ width: `${lvlProg.percentage}%` }}
+                            transition={{ duration: 0.9, ease: [0.22, 1, 0.36, 1] }}
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Daily goal + subject XP row */}
+                    <div className="bg-white rounded-3xl p-5 shadow-[0_2px_12px_rgba(0,0,0,0.06)]">
+                      {/* Daily goal */}
+                      <div className="flex items-center justify-between mb-2">
+                        <p className="text-[11px] font-semibold tracking-widest uppercase text-[#8e8e93]">Daily goal</p>
+                        <p className="text-[12px] font-bold text-[#1a1a1a]">{progress.dailyXp || 0} / {DAILY_GOAL_XP} XP</p>
+                      </div>
+                      <div className="h-2 bg-[#eef0f4] rounded-full overflow-hidden mb-4">
+                        <motion.div
+                          className="h-full bg-gradient-to-r from-[#34c759] to-[#30b454] rounded-full"
+                          initial={{ width: 0 }}
+                          animate={{ width: `${dailyPct}%` }}
+                          transition={{ duration: 0.6, ease: 'easeOut' }}
+                        />
+                      </div>
+
+                      {/* Per-subject XP breakdown */}
+                      {subjectEntries.length > 0 && (
+                        <div>
+                          <p className="text-[11px] font-semibold tracking-widest uppercase text-[#8e8e93] mb-2.5">XP by subject</p>
+                          <div className="space-y-2">
+                            {subjectEntries
+                              .sort(([, a], [, b]) => b - a)
+                              .map(([subject, xp]) => {
+                                const color = SUBJECT_COLORS[subject] || '#8e8e93'
+                                const maxXp = subjectEntries.reduce((m, [, v]) => Math.max(m, v), 0)
+                                const pct = Math.min(100, Math.round((xp / maxXp) * 100))
+                                return (
+                                  <div key={subject}>
+                                    <div className="flex justify-between text-[12px] mb-1">
+                                      <span className="font-semibold text-[#1a1a1a]">{subject}</span>
+                                      <span className="font-bold" style={{ color }}>{xp} XP</span>
+                                    </div>
+                                    <div className="h-1.5 bg-[#eef0f4] rounded-full overflow-hidden">
+                                      <motion.div
+                                        className="h-full rounded-full"
+                                        style={{ backgroundColor: color }}
+                                        initial={{ width: 0 }}
+                                        animate={{ width: `${pct}%` }}
+                                        transition={{ duration: 0.7, ease: 'easeOut' }}
+                                      />
+                                    </div>
+                                  </div>
+                                )
+                              })}
+                          </div>
+                        </div>
+                      )}
+
+                      {progress.lastTopic && (
+                        <p className="text-[12px] text-[#8e8e93] mt-3">
+                          Last lesson: <span className="text-[#1a1a1a] font-semibold">{progress.lastTopic}</span>
+                          {progress.lastSubject ? ` · ${progress.lastSubject}` : ''}
+                        </p>
+                      )}
+                    </div>
+                  </motion.div>
+                )
+              })()}
 
               {/* Recommended for you */}
               <RecommendedCard recommendation={recommendation} onPick={handlePickRecommendation} />

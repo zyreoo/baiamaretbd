@@ -12,6 +12,10 @@ import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore'
 export async function syncUserSnapshot(userId, username, snapshot = {}) {
   if (!userId) return
   try {
+    // Compute level server-side-free: import inline to avoid circular deps.
+    const { getLevel } = await import('./progressStore')
+    const level = getLevel(snapshot.totalXp || 0)
+
     await setDoc(
       doc(db, 'users', userId),
       {
@@ -19,6 +23,8 @@ export async function syncUserSnapshot(userId, username, snapshot = {}) {
         totalXp: snapshot.totalXp || 0,
         dailyXp: snapshot.dailyXp || 0,
         streak: snapshot.streak || 0,
+        level,
+        subjectXp: snapshot.subjectXp || {},
         lastActiveAt: serverTimestamp(),
       },
       { merge: true },

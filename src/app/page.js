@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { AnimatePresence } from 'framer-motion'
 import LoginScreen from '@/components/LoginScreen'
 import OnboardingChat from '@/components/OnboardingChat'
@@ -17,12 +17,60 @@ const SCREENS = {
   DASHBOARD: 'dashboard',
 }
 
+// ─── Session helpers (localStorage) ───────────────────────────────────────────
+
+const SESSION_KEY = 'baiamare_session_v1'
+
+function readSession() {
+  if (typeof window === 'undefined') return null
+  try {
+    const raw = window.localStorage.getItem(SESSION_KEY)
+    return raw ? JSON.parse(raw) : null
+  } catch {
+    return null
+  }
+}
+
+function saveSession(userId, username, profile) {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(SESSION_KEY, JSON.stringify({ userId, username, profile }))
+  } catch { /* quota */ }
+}
+
+function clearSession() {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.removeItem(SESSION_KEY)
+  } catch { /* ignore */ }
+}
+
+// ─── Page ──────────────────────────────────────────────────────────────────────
+
 export default function Home() {
   const [screen, setScreen] = useState(SCREENS.LOGIN)
   const [username, setUsername] = useState('')
   const [userId, setUserId] = useState('')
   const [profile, setProfile] = useState(null)
   const [isCheckingUser, setIsCheckingUser] = useState(false)
+
+  // Restore session after mount to avoid SSR/client hydration mismatch.
+  useEffect(() => {
+    const sess = readSession()
+    if (sess?.profile && sess?.userId) {
+      setUserId(sess.userId)
+      setUsername(sess.username || '')
+      setProfile(sess.profile)
+      setScreen(SCREENS.DASHBOARD)
+    }
+  }, [])
+
+  // Whenever the profile or userId changes, keep the session in sync.
+  useEffect(() => {
+    if (profile && userId) {
+      saveSession(userId, username, profile)
+    }
+  }, [profile, userId, username])
 
   async function handleLogin(name, password) {
     setIsCheckingUser(true)
@@ -74,8 +122,9 @@ export default function Home() {
               console.warn('Could not backfill userId on profile:', err.message)
             }
           }
-          setProfile({ ...docSnap.data(), _docId: docSnap.id, userId: authData.userId })
-          // Returning user with a finished profile → go straight to the dashboard
+          const loadedProfile = { ...docSnap.data(), _docId: docSnap.id, userId: authData.userId }
+          setProfile(loadedProfile)
+          saveSession(authData.userId, name, loadedProfile)
           setScreen(SCREENS.DASHBOARD)
           return
         }
@@ -105,7 +154,9 @@ export default function Home() {
       console.warn('Firestore save skipped (check env vars):', err.message)
     }
 
-    setProfile({ ...profileWithUser, _docId: docId })
+    const finalProfile = { ...profileWithUser, _docId: docId }
+    setProfile(finalProfile)
+    saveSession(userId, username, finalProfile)
     setScreen(SCREENS.PROFILE)
   }
 
@@ -114,6 +165,7 @@ export default function Home() {
   }
 
   function handleLogout() {
+    clearSession()
     setProfile(null)
     setUsername('')
     setUserId('')

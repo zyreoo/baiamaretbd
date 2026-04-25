@@ -1,24 +1,70 @@
-// Lightweight localStorage helper for XP, streaks, and daily goal.
+// Lightweight localStorage helper for XP, streaks, daily goal, levels, and subject XP.
 // All functions are SSR-safe (return defaults when window is undefined).
 
 export const DAILY_GOAL_XP = 60
+
+// ─── Level system ──────────────────────────────────────────────────────────────
+// Cumulative XP needed to REACH each level (index = level - 1).
+// Beyond level 10: +2 500 XP per level.
+
+export const LEVEL_THRESHOLDS = [0, 100, 250, 500, 900, 1400, 2100, 3000, 4500, 6500]
+
+export function getLevel(totalXp) {
+  const xp = totalXp || 0
+  for (let i = LEVEL_THRESHOLDS.length - 1; i >= 0; i--) {
+    if (xp >= LEVEL_THRESHOLDS[i]) {
+      const level = i + 1
+      if (i === LEVEL_THRESHOLDS.length - 1) {
+        // Beyond the last defined threshold: +2 500 XP per extra level
+        const extra = Math.floor((xp - LEVEL_THRESHOLDS[i]) / 2500)
+        return level + extra
+      }
+      return level
+    }
+  }
+  return 1
+}
+
+export function getLevelProgress(totalXp) {
+  const xp = totalXp || 0
+  const level = getLevel(xp)
+  const maxIdx = LEVEL_THRESHOLDS.length - 1
+
+  const currentThreshold =
+    level - 1 < LEVEL_THRESHOLDS.length
+      ? LEVEL_THRESHOLDS[level - 1]
+      : LEVEL_THRESHOLDS[maxIdx] + (level - 1 - maxIdx) * 2500
+
+  const nextThreshold =
+    level < LEVEL_THRESHOLDS.length
+      ? LEVEL_THRESHOLDS[level]
+      : LEVEL_THRESHOLDS[maxIdx] + (level - maxIdx) * 2500
+
+  const currentLevelXp = xp - currentThreshold
+  const xpNeeded = nextThreshold - currentThreshold
+  const percentage = Math.min(100, Math.round((currentLevelXp / xpNeeded) * 100))
+
+  return { level, currentLevelXp, xpNeeded, percentage, totalXp: xp, nextThreshold }
+}
 
 const KEY_PREFIX = 'baiamare_progress_v1'
 
 const DEFAULTS = {
   totalXp: 0,
   dailyXp: 0,
-  dailyDate: null, // YYYY-MM-DD
+  dailyDate: null,        // YYYY-MM-DD
   streak: 0,
   lastCompletedDate: null, // YYYY-MM-DD
   lastClass: null,
   lastSubject: null,
   lastTopic: null,
-  // Most recent lesson outcome — used to drive next-lesson recommendation.
+  // Most recent lesson outcome — drives next-lesson recommendation.
   lastCorrect: 0,
   lastWrong: 0,
   lastPercentage: 0,
   lastXpEarned: 0,
+  // Per-subject XP totals  e.g. { Mathematics: 90, Physics: 45 }
+  subjectXp: {},
 }
 
 function todayKey() {
@@ -42,7 +88,8 @@ function readRaw(userId) {
   try {
     const stored = window.localStorage.getItem(getStorageKey(userId))
     if (!stored) return { ...DEFAULTS }
-    return { ...DEFAULTS, ...JSON.parse(stored) }
+    const parsed = JSON.parse(stored)
+    return { ...DEFAULTS, ...parsed, subjectXp: { ...(parsed.subjectXp || {}) } }
   } catch {
     return { ...DEFAULTS }
   }
@@ -68,12 +115,12 @@ function rolloverDaily(state) {
 
 export function getProgress(userId) {
   const state = rolloverDaily(readRaw(userId))
-  // Persist the rollover so future reads are consistent.
   writeRaw(userId, state)
   return state
 }
 
-// Adds XP earned from a single lesson completion. Updates streak + last lesson.
+// Adds XP earned from a single lesson completion.
+// Updates streak, totals, per-subject XP, and last-lesson metadata.
 export function addLessonProgress({
   userId,
   xpEarned = 0,
@@ -94,7 +141,6 @@ export function addLessonProgress({
     } else if (state.lastCompletedDate === null) {
       state.streak = 1
     } else {
-      // Skipped a day — reset to 1.
       state.streak = 1
     }
   }
@@ -109,6 +155,12 @@ export function addLessonProgress({
   state.lastWrong = wrongAnswers
   state.lastPercentage = percentage
   state.lastXpEarned = xpEarned
+
+  // Per-subject XP accumulation.
+  if (selectedSubject) {
+    const prev = state.subjectXp || {}
+    state.subjectXp = { ...prev, [selectedSubject]: (prev[selectedSubject] || 0) + xpEarned }
+  }
 
   writeRaw(userId, state)
   return state

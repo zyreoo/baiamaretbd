@@ -15,6 +15,18 @@ import {
   serverTimestamp,
   limit,
 } from 'firebase/firestore'
+import { getLevel, getLevelProgress } from '@/lib/progressStore'
+
+const SUBJECT_COLORS = {
+  Mathematics: '#5856D6',
+  Science: '#34c759',
+  Physics: '#FF9F0A',
+  Chemistry: '#FF375F',
+  Biology: '#30D158',
+  English: '#007AFF',
+  History: '#BF5AF2',
+  Geography: '#32ADE6',
+}
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -135,7 +147,21 @@ export default function FriendsScreen({ profile }) {
       const friendUid = r.fromUid === myUid ? r.toUid : r.fromUid
       const friendUsername = r.fromUid === myUid ? r.toUsername : r.fromUsername
       const snap = friendSnapshots[friendUid] || {}
-      return { requestId: r.id, friendUid, friendUsername, totalXp: snap.totalXp || 0, streak: snap.streak || 0 }
+      const totalXp = snap.totalXp || 0
+      const level = snap.level || getLevel(totalXp)
+      const levelProgress = getLevelProgress(totalXp)
+      const subjectXp = snap.subjectXp || {}
+      const topSubjects = Object.entries(subjectXp).sort(([, a], [, b]) => b - a).slice(0, 3)
+      return {
+        requestId: r.id,
+        friendUid,
+        friendUsername,
+        totalXp,
+        streak: snap.streak || 0,
+        level,
+        levelProgress,
+        topSubjects,
+      }
     })
 
   // ─ Search ───────────────────────────────────────────────────────────────────
@@ -431,26 +457,66 @@ export default function FriendsScreen({ profile }) {
                       initial={{ opacity: 0, x: -8 }}
                       animate={{ opacity: 1, x: 0 }}
                       transition={{ delay: 0.2 + i * 0.05 }}
-                      whileHover={{ scale: 1.005 }}
-                      className="flex items-center gap-3 p-4 rounded-2xl bg-white shadow-[0_2px_10px_rgba(0,0,0,0.05)] hover:shadow-[0_4px_16px_rgba(0,0,0,0.08)] transition-shadow"
+                      className="p-4 rounded-3xl bg-white shadow-[0_2px_12px_rgba(0,0,0,0.06)]"
                     >
-                      <Avatar name={f.friendUsername} size={11} />
-                      <div className="flex-1 min-w-0">
-                        <p className="text-[15px] font-semibold text-[#1a1a1a] truncate">
-                          {f.friendUsername}
-                        </p>
-                        {f.streak > 0 && (
-                          <p className="text-[11px] text-[#8e8e93] mt-0.5">
-                            🔥 {f.streak} day streak
+                      {/* Row 1: avatar + name + level + XP */}
+                      <div className="flex items-center gap-3 mb-3">
+                        <Avatar name={f.friendUsername} size={11} />
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <p className="text-[15px] font-bold text-[#1a1a1a] truncate">
+                              {f.friendUsername}
+                            </p>
+                            <span className="px-2 py-0.5 rounded-full bg-gradient-to-r from-[#ede8ff] to-[#e8f0ff] text-[11px] font-bold text-[#5856D6] flex-shrink-0">
+                              Lv {f.level}
+                            </span>
+                          </div>
+                          {f.streak > 0 && (
+                            <p className="text-[11px] text-[#8e8e93] mt-0.5">
+                              🔥 {f.streak} day streak
+                            </p>
+                          )}
+                        </div>
+                        <div className="flex-shrink-0 text-right">
+                          <p className="text-[15px] font-bold text-[#5856D6]">
+                            {f.totalXp.toLocaleString()}
                           </p>
-                        )}
+                          <p className="text-[10px] text-[#8e8e93] font-medium">total XP</p>
+                        </div>
                       </div>
-                      <div className="flex-shrink-0 text-right">
-                        <p className="text-[15px] font-bold text-[#5856D6]">
-                          {f.totalXp.toLocaleString()}
-                        </p>
-                        <p className="text-[10px] text-[#8e8e93] font-medium">XP total</p>
+
+                      {/* Level XP progress bar */}
+                      <div className="mb-3">
+                        <div className="flex justify-between text-[10px] text-[#8e8e93] font-medium mb-1">
+                          <span>Level {f.level}</span>
+                          <span>
+                            {f.levelProgress.xpNeeded - f.levelProgress.currentLevelXp} XP → Lv {f.level + 1}
+                          </span>
+                        </div>
+                        <div className="h-1.5 bg-[#eef0f4] rounded-full overflow-hidden">
+                          <motion.div
+                            className="h-full bg-gradient-to-r from-[#5856D6] to-[#a78bfa] rounded-full"
+                            initial={{ width: 0 }}
+                            animate={{ width: `${f.levelProgress.percentage}%` }}
+                            transition={{ duration: 0.7, ease: [0.22, 1, 0.36, 1], delay: 0.25 + i * 0.05 }}
+                          />
+                        </div>
                       </div>
+
+                      {/* Top subjects */}
+                      {f.topSubjects.length > 0 && (
+                        <div className="flex flex-wrap gap-1.5">
+                          {f.topSubjects.map(([subject, xp]) => (
+                            <span
+                              key={subject}
+                              className="px-2.5 py-1 rounded-full text-[11px] font-semibold text-white"
+                              style={{ backgroundColor: SUBJECT_COLORS[subject] || '#8e8e93' }}
+                            >
+                              {subject} · {xp} XP
+                            </span>
+                          ))}
+                        </div>
+                      )}
                     </motion.div>
                   ))}
 

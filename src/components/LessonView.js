@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { db } from '@/lib/firebase'
 import { addDoc, collection, serverTimestamp } from 'firebase/firestore'
-import { addLessonProgress, DAILY_GOAL_XP, getProgress } from '@/lib/progressStore'
+import { addLessonProgress, DAILY_GOAL_XP, getLevel, getLevelProgress, getProgress } from '@/lib/progressStore'
 import { syncUserSnapshot } from '@/lib/userStore'
 import AnimatedNumber from './AnimatedNumber'
 import Confetti from './Confetti'
@@ -46,9 +46,8 @@ function ArrowLeftIcon() {
 
 // ─── Top status bar (always visible during lesson) ─────────────────────────────
 
-function StatusBar({ currentXp, totalXp, dailyXp, streak, onBack, xpPulseKey }) {
-  const dailyPct = Math.min(100, Math.round((dailyXp / DAILY_GOAL_XP) * 100))
-  const lessonPct = Math.min(100, Math.round((currentXp / totalXp) * 100))
+function StatusBar({ currentXp, totalXp, totalOverallXp, streak, onBack, xpPulseKey }) {
+  const levelProg = getLevelProgress(totalOverallXp || 0)
 
   return (
     <div className="sticky top-0 z-20 bg-white/85 backdrop-blur-xl border-b border-[#e8e8ed]">
@@ -62,18 +61,22 @@ function StatusBar({ currentXp, totalXp, dailyXp, streak, onBack, xpPulseKey }) 
             Exit
           </button>
 
+          {/* Level + XP to next level */}
           <div className="flex-1 min-w-0 mx-2">
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-[10px] font-bold text-[#5856D6] tracking-wide">Lv {levelProg.level}</span>
+              <span className="text-[10px] text-[#8e8e93] font-medium">
+                {levelProg.currentLevelXp} / {levelProg.xpNeeded} XP
+              </span>
+            </div>
             <div className="h-1.5 bg-[#eef0f4] rounded-full overflow-hidden">
               <motion.div
-                className="h-full bg-gradient-to-r from-[#34c759] to-[#30b454] rounded-full"
+                className="h-full bg-gradient-to-r from-[#5856D6] to-[#8a84ff] rounded-full"
                 initial={{ width: 0 }}
-                animate={{ width: `${Math.max(dailyPct, lessonPct)}%` }}
+                animate={{ width: `${levelProg.percentage}%` }}
                 transition={{ duration: 0.7, ease: [0.22, 1, 0.36, 1] }}
               />
             </div>
-            <p className="text-[10px] text-[#8e8e93] mt-1 font-medium">
-              Daily goal {dailyXp}/{DAILY_GOAL_XP} XP
-            </p>
           </div>
 
           <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#fff3e8] flex-shrink-0">
@@ -651,6 +654,8 @@ function CompletionScreen({
   selectedClass,
   selectedSubject,
   selectedTopic,
+  levelProgress,
+  levelUpInfo,
 }) {
   const totalXp = lesson?.total_xp || 45
   const percentage = Math.min(100, Math.round((currentXp / totalXp) * 100))
@@ -721,6 +726,71 @@ function CompletionScreen({
           </div>
         )}
       </div>
+
+      {/* Level-up banner — shown only when the user crossed a level boundary */}
+      <AnimatePresence>
+        {levelUpInfo && (
+          <motion.div
+            initial={{ opacity: 0, scale: 0.88, y: 20 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            transition={{ delay: 0.1, type: 'spring', stiffness: 200, damping: 16 }}
+            className="relative overflow-hidden rounded-3xl p-6 bg-gradient-to-br from-[#5856D6] via-[#7c6cff] to-[#a78bfa] shadow-[0_12px_36px_rgba(88,86,214,0.4)] text-center"
+          >
+            <motion.div
+              initial={{ scale: 0.5, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              transition={{ delay: 0.3, type: 'spring', stiffness: 240, damping: 14 }}
+              className="text-[56px] leading-none mb-1"
+            >
+              🚀
+            </motion.div>
+            <p className="text-[11px] font-bold tracking-widest uppercase text-white/70">Level up!</p>
+            <h3 className="text-[28px] font-bold text-white mt-0.5 tracking-tight">
+              Level {levelUpInfo.newLevel}
+            </h3>
+            <p className="text-[13px] text-white/80 mt-1">
+              You jumped from Lv {levelUpInfo.oldLevel} to Lv {levelUpInfo.newLevel}!
+            </p>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Level XP progress card */}
+      {levelProgress && (
+        <motion.div
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.2, duration: 0.45, ease: [0.22, 1, 0.36, 1] }}
+          className="bg-white rounded-3xl p-5 shadow-[0_2px_12px_rgba(0,0,0,0.06)]"
+        >
+          <div className="flex items-center justify-between mb-3">
+            <div>
+              <p className="text-[11px] font-semibold tracking-widest uppercase text-[#8e8e93]">Your level</p>
+              <p className="text-[22px] font-bold text-[#5856D6] mt-0.5">Level {levelProgress.level}</p>
+            </div>
+            <div className="text-right">
+              <p className="text-[11px] text-[#8e8e93] font-medium">Total XP</p>
+              <p className="text-[20px] font-bold text-[#1a1a1a]">
+                <AnimatedNumber value={levelProgress.totalXp} duration={900} />
+              </p>
+            </div>
+          </div>
+          <div className="h-2.5 bg-[#eef0f4] rounded-full overflow-hidden">
+            <motion.div
+              className="h-full bg-gradient-to-r from-[#5856D6] to-[#a78bfa] rounded-full"
+              initial={{ width: 0 }}
+              animate={{ width: `${levelProgress.percentage}%` }}
+              transition={{ duration: 1.1, ease: [0.22, 1, 0.36, 1], delay: 0.3 }}
+            />
+          </div>
+          <div className="flex justify-between mt-1.5">
+            <p className="text-[11px] text-[#8e8e93] font-medium">{levelProgress.currentLevelXp} XP</p>
+            <p className="text-[11px] text-[#5856D6] font-semibold">
+              {levelProgress.xpNeeded - levelProgress.currentLevelXp} XP to Lv {levelProgress.level + 1}
+            </p>
+          </div>
+        </motion.div>
+      )}
 
       {/* Single hero achievement badge */}
       {heroBadge && (
@@ -908,6 +978,7 @@ export default function LessonView({
   // Floating "+10 XP" toast state — re-fires on every gain.
   const [xpToast, setXpToast] = useState({ amount: 0, id: 0 })
   const [confettiKey, setConfettiKey] = useState(0)
+  const [levelUpInfo, setLevelUpInfo] = useState(null) // { newLevel, oldLevel } when a level-up occurs
 
   // Live progress (XP/streak/daily) — re-read on mount and after completions.
   const [progress, setProgress] = useState(() => getProgress(profile?.userId))
@@ -984,6 +1055,9 @@ export default function LessonView({
     if (correctAnswers === 3) achievementBadges.push('🧠 Problem Solver')
     if (wrongAnswers === 0) achievementBadges.push('🎯 Consistent Thinker')
 
+    const xpBefore = progress.totalXp || 0
+    const levelBefore = getLevel(xpBefore)
+
     const updated = addLessonProgress({
       userId: profile?.userId,
       xpEarned: totalEarned,
@@ -995,6 +1069,11 @@ export default function LessonView({
       percentage,
     })
     setProgress(updated)
+
+    const levelAfter = getLevel(updated.totalXp || 0)
+    if (levelAfter > levelBefore) {
+      setLevelUpInfo({ newLevel: levelAfter, oldLevel: levelBefore })
+    }
 
     // Persist XP/streak snapshot to Firestore so friends can see it.
     syncUserSnapshot(profile?.userId, profile?.username, updated)
@@ -1081,7 +1160,7 @@ export default function LessonView({
       <StatusBar
         currentXp={currentXp}
         totalXp={totalXp}
-        dailyXp={progress.dailyXp}
+        totalOverallXp={progress.totalXp}
         streak={progress.streak}
         onBack={onBack}
         xpPulseKey={xpToast.id}
@@ -1167,6 +1246,8 @@ export default function LessonView({
               selectedClass={selectedClass}
               selectedSubject={selectedSubject}
               selectedTopic={selectedTopic}
+              levelProgress={getLevelProgress(progress.totalXp || 0)}
+              levelUpInfo={levelUpInfo}
             />
           )}
 
@@ -1200,6 +1281,8 @@ export default function LessonView({
               selectedClass={selectedClass}
               selectedSubject={selectedSubject}
               selectedTopic={selectedTopic}
+              levelProgress={getLevelProgress(progress.totalXp || 0)}
+              levelUpInfo={levelUpInfo}
             />
           )}
         </AnimatePresence>

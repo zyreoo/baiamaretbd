@@ -2,125 +2,39 @@ import { NextResponse } from 'next/server'
 
 const HACKCLUB_API = 'https://ai.hackclub.com/proxy/v1/chat/completions'
 const MODEL = 'qwen/qwen3-32b'
+const AI_TIMEOUT_MS = 25000
 
-function buildPrompt(profile, selectedClass, selectedSubject, selectedTopic) {
-  return `Create a personalized interactive lesson for this student.
-
-Student profile:
-${JSON.stringify(profile, null, 2)}
-
-Class:
-${selectedClass}
-
-Subject:
-${selectedSubject}
-
-Topic:
-${selectedTopic}
-
-Return the lesson in this exact JSON format:
-{
-  "title": "string",
-  "intro": "personalized intro based on learner profile",
-  "estimated_time": "3-5 min",
-  "total_xp": 45,
-  "steps": [
-    {
-      "id": 1,
-      "type": "concept",
-      "title": "string",
-      "content": "short explanation personalized to student profile",
-      "question": {
-        "text": "quick question to continue",
-        "options": ["option 1", "option 2", "option 3"],
-        "correct_answer": "option 1",
-        "xp": 10,
-        "feedback_correct": "short encouraging feedback",
-        "feedback_wrong": "short helpful explanation",
-        "hint": "short hint without giving answer",
-        "simpler_explanation": "explain this like I am 10 using an analogy"
-      }
-    },
-    {
-      "id": 2,
-      "type": "example",
-      "title": "string",
-      "content": "simple example",
-      "question": {
-        "text": "question about the example",
-        "options": ["option 1", "option 2", "option 3"],
-        "correct_answer": "option 1",
-        "xp": 15,
-        "feedback_correct": "string",
-        "feedback_wrong": "string",
-        "hint": "string",
-        "simpler_explanation": "string"
-      }
-    },
-    {
-      "id": 3,
-      "type": "practice",
-      "title": "string",
-      "content": "practice explanation",
-      "question": {
-        "text": "practice question",
-        "options": ["option 1", "option 2", "option 3"],
-        "correct_answer": "option 1",
-        "xp": 20,
-        "feedback_correct": "string",
-        "feedback_wrong": "string",
-        "hint": "string",
-        "simpler_explanation": "string"
-      }
-    }
-  ],
-  "challenge_mode": {
-    "title": "Challenge yourself",
-    "description": "Two harder questions to earn bonus XP.",
-    "total_bonus_xp": 60,
-    "questions": [
-      {
-        "text": "harder question 1",
-        "options": ["option 1", "option 2", "option 3"],
-        "correct_answer": "option 1",
-        "xp": 30,
-        "feedback_correct": "string",
-        "feedback_wrong": "string",
-        "hint": "string"
-      },
-      {
-        "text": "harder question 2",
-        "options": ["option 1", "option 2", "option 3"],
-        "correct_answer": "option 1",
-        "xp": 30,
-        "feedback_correct": "string",
-        "feedback_wrong": "string",
-        "hint": "string"
-      }
-    ]
-  },
-  "final_message": "short motivational message",
-  "study_tip": "personalized study tip"
+function compactProfile(profile) {
+  return {
+    learner_type: profile?.learner_type || 'Learner',
+    learning_style: profile?.learning_style || 'mixed',
+    pace: profile?.pace || 'mixed',
+    support_style: profile?.support_style || 'mixed',
+    motivation_type: profile?.motivation_type || 'mixed',
+  }
 }
 
-Rules:
-- Create exactly 3 main lesson steps with types: concept, example, practice (in that order).
-- Each step must have one multiple-choice question with exactly 3 options.
-- The correct_answer field MUST exactly match one of the strings in options.
-- XP: step 1 = 10, step 2 = 15, step 3 = 20. total_xp = 45.
-- Challenge mode must have exactly 2 harder questions, each worth 30 XP. total_bonus_xp = 60.
-- Personalize the intro using the learner's style. Example: "Since you learn best with examples, let's explore Fractions through real-life situations."
-- Match content to the learner's learning_style:
-  visual → mention patterns, diagrams, colors, visual memory
-  practical → exercises and doing-based learning
-  logical → step-by-step reasoning
-  story-based → real-life analogies
-  mixed → balanced explanation
-- Match the student's pace and support_style.
-- Keep every step short and demo-friendly (2-3 sentences max for content).
-- Hints should guide without revealing the answer.
-- simpler_explanation should explain "like I'm 10" with an analogy.
-- Return ONLY valid JSON. No markdown fences. No prose before or after.`
+function buildPrompt(profile, selectedClass, selectedSubject, selectedTopic) {
+  return `Create a personalized interactive lesson.
+
+Context:
+- profile: ${JSON.stringify(compactProfile(profile))}
+- class: ${selectedClass}
+- subject: ${selectedSubject}
+- topic: ${selectedTopic}
+
+Return JSON only with keys:
+title, intro, estimated_time, total_xp, steps, challenge_mode, final_message, study_tip.
+
+Requirements:
+- 3 steps exactly: concept, example, practice.
+- Each step: id, type, title, content, question.
+- question must include: text, options(3), correct_answer, xp, feedback_correct, feedback_wrong, hint, simpler_explanation.
+- XP: 10, 15, 20. total_xp = 45.
+- challenge_mode has exactly 2 questions, xp 30 each, total_bonus_xp = 60.
+- Keep content short and demo-ready (2-3 sentences max).
+- Match learning_style in tone and examples.
+- Return valid JSON only, no markdown fences.`
 }
 
 function fallbackLesson(selectedTopic, selectedSubject, profile) {
@@ -239,9 +153,11 @@ function fallbackLesson(selectedTopic, selectedSubject, profile) {
 }
 
 export async function POST(request) {
+  let parsedBody = {}
+  let timeoutId = null
   try {
-    const body = await request.json()
-    const { profile, selectedClass, selectedSubject, selectedTopic } = body
+    parsedBody = await request.json()
+    const { profile, selectedClass, selectedSubject, selectedTopic } = parsedBody
 
     if (!selectedClass || !selectedSubject || !selectedTopic) {
       return NextResponse.json({ error: 'Missing required fields.' }, { status: 400 })
@@ -253,15 +169,18 @@ export async function POST(request) {
       return NextResponse.json({ lesson: fallbackLesson(selectedTopic, selectedSubject, profile) })
     }
 
+    const controller = new AbortController()
+    timeoutId = setTimeout(() => controller.abort(), AI_TIMEOUT_MS)
+
     const aiResponse = await fetch(HACKCLUB_API, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
       },
+      signal: controller.signal,
       body: JSON.stringify({
         model: MODEL,
-        stream: true,
         messages: [
           {
             role: 'system',
@@ -273,9 +192,11 @@ export async function POST(request) {
             content: buildPrompt(profile, selectedClass, selectedSubject, selectedTopic),
           },
         ],
-        temperature: 0.7,
+        temperature: 0.35,
+        max_tokens: 1400,
       }),
     })
+    clearTimeout(timeoutId)
 
     if (!aiResponse.ok) {
       const errText = await aiResponse.text()
@@ -283,8 +204,17 @@ export async function POST(request) {
       return NextResponse.json({ lesson: fallbackLesson(selectedTopic, selectedSubject, profile) })
     }
 
-    const aiData = await aiResponse.json()
-    const rawContent = aiData?.choices?.[0]?.message?.content || ''
+    const rawResponseText = await aiResponse.text()
+    let rawContent = ''
+
+    try {
+      const aiData = JSON.parse(rawResponseText)
+      rawContent = aiData?.choices?.[0]?.message?.content || ''
+    } catch {
+      // If provider returns non-JSON text, we still fall back gracefully.
+      console.warn('AI returned non-JSON payload. Raw head:', rawResponseText.slice(0, 120))
+      return NextResponse.json({ lesson: fallbackLesson(selectedTopic, selectedSubject, profile) })
+    }
 
     const cleaned = rawContent
       .replace(/^```(?:json)?\s*/i, '')
@@ -295,8 +225,19 @@ export async function POST(request) {
     try {
       lesson = JSON.parse(cleaned)
     } catch {
-      console.warn('Could not parse AI JSON response — using fallback. Raw:', rawContent.slice(0, 300))
-      lesson = fallbackLesson(selectedTopic, selectedSubject, profile)
+      // Try to salvage JSON object if the model wrapped it with extra text.
+      try {
+        const jsonStart = cleaned.indexOf('{')
+        const jsonEnd = cleaned.lastIndexOf('}')
+        if (jsonStart >= 0 && jsonEnd > jsonStart) {
+          lesson = JSON.parse(cleaned.slice(jsonStart, jsonEnd + 1))
+        } else {
+          throw new Error('No JSON object bounds found')
+        }
+      } catch {
+        console.warn('Could not parse AI JSON response — using fallback. Raw:', rawContent.slice(0, 300))
+        lesson = fallbackLesson(selectedTopic, selectedSubject, profile)
+      }
     }
 
     // Light sanity check — if the model omitted the new structure, fall back
@@ -307,6 +248,17 @@ export async function POST(request) {
 
     return NextResponse.json({ lesson })
   } catch (err) {
+    if (timeoutId) clearTimeout(timeoutId)
+    if (err?.name === 'AbortError') {
+      console.warn('generate-lesson timed out — using fallback lesson.')
+      return NextResponse.json({
+        lesson: fallbackLesson(
+          parsedBody?.selectedTopic || 'Topic',
+          parsedBody?.selectedSubject || 'Subject',
+          parsedBody?.profile || {},
+        ),
+      })
+    }
     console.error('generate-lesson route error:', err)
     return NextResponse.json({ error: err.message }, { status: 500 })
   }
