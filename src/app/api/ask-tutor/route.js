@@ -49,6 +49,7 @@ export async function POST(request) {
       },
       body: JSON.stringify({
         model: MODEL,
+        stream: true,
         messages: [
           {
             role: 'system',

@@ -5,6 +5,18 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { db } from '@/lib/firebase'
 import { addDoc, collection, serverTimestamp } from 'firebase/firestore'
 import { addLessonProgress, DAILY_GOAL_XP, getProgress } from '@/lib/progressStore'
+import { syncUserSnapshot } from '@/lib/userStore'
+import AnimatedNumber from './AnimatedNumber'
+import Confetti from './Confetti'
+
+// Personalized intro lines based on the learner's style (shown before Step 1).
+const STYLE_INTRO = {
+  visual: 'Since you learn best with visuals and patterns,',
+  practical: 'Since you learn best by doing and practicing,',
+  logical: 'Since you prefer step-by-step reasoning,',
+  'story-based': 'Since you understand things better through real-life examples,',
+  mixed: "I'll mix examples, explanations, and practice to match your style,",
+}
 
 // ─── Tiny icons ────────────────────────────────────────────────────────────────
 
@@ -34,8 +46,9 @@ function ArrowLeftIcon() {
 
 // ─── Top status bar (always visible during lesson) ─────────────────────────────
 
-function StatusBar({ currentXp, totalXp, dailyXp, streak, onBack }) {
+function StatusBar({ currentXp, totalXp, dailyXp, streak, onBack, xpPulseKey }) {
   const dailyPct = Math.min(100, Math.round((dailyXp / DAILY_GOAL_XP) * 100))
+  const lessonPct = Math.min(100, Math.round((currentXp / totalXp) * 100))
 
   return (
     <div className="sticky top-0 z-20 bg-white/85 backdrop-blur-xl border-b border-[#e8e8ed]">
@@ -54,8 +67,8 @@ function StatusBar({ currentXp, totalXp, dailyXp, streak, onBack }) {
               <motion.div
                 className="h-full bg-gradient-to-r from-[#34c759] to-[#30b454] rounded-full"
                 initial={{ width: 0 }}
-                animate={{ width: `${dailyPct}%` }}
-                transition={{ duration: 0.5, ease: 'easeOut' }}
+                animate={{ width: `${Math.max(dailyPct, lessonPct)}%` }}
+                transition={{ duration: 0.7, ease: [0.22, 1, 0.36, 1] }}
               />
             </div>
             <p className="text-[10px] text-[#8e8e93] mt-1 font-medium">
@@ -68,13 +81,44 @@ function StatusBar({ currentXp, totalXp, dailyXp, streak, onBack }) {
             <span className="text-[12px] font-bold text-[#c66800]">{streak}</span>
           </div>
 
-          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-gradient-to-r from-[#e8f4ff] to-[#ede8ff] flex-shrink-0">
+          <motion.div
+            key={`xp-pill-${xpPulseKey || 0}`}
+            initial={{ scale: 1 }}
+            animate={{ scale: xpPulseKey ? [1, 1.12, 1] : 1 }}
+            transition={{ duration: 0.45, ease: 'easeOut' }}
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-gradient-to-r from-[#e8f4ff] to-[#ede8ff] flex-shrink-0"
+          >
             <span className="text-[12px]">⚡</span>
-            <span className="text-[12px] font-bold text-[#5856D6]">{currentXp}/{totalXp}</span>
-          </div>
+            <span className="text-[12px] font-bold text-[#5856D6]">
+              <AnimatedNumber value={currentXp} duration={650} />/{totalXp}
+            </span>
+          </motion.div>
         </div>
       </div>
     </div>
+  )
+}
+
+// ─── Floating "+10 XP" toast ───────────────────────────────────────────────────
+
+function XpToast({ amount, id }) {
+  return (
+    <AnimatePresence>
+      {amount > 0 && (
+        <motion.div
+          key={`xp-toast-${id}`}
+          initial={{ opacity: 0, y: 0, scale: 0.85 }}
+          animate={{ opacity: 1, y: -50, scale: 1 }}
+          exit={{ opacity: 0, y: -80, scale: 0.95 }}
+          transition={{ duration: 1, ease: [0.22, 1, 0.36, 1] }}
+          className="pointer-events-none fixed top-20 left-1/2 -translate-x-1/2 z-50"
+        >
+          <span className="px-4 py-2 rounded-full bg-gradient-to-r from-[#34c759] to-[#30b454] text-white text-[14px] font-bold shadow-[0_8px_24px_rgba(52,199,89,0.35)]">
+            +{amount} XP
+          </span>
+        </motion.div>
+      )}
+    </AnimatePresence>
   )
 }
 
@@ -139,12 +183,44 @@ function QuestionBlock({
   onContinue,
   continueLabel = 'Continue →',
   showSimplerOption = true,
+  // Context used by the "I still don't get it" → /api/ask-tutor button.
+  tutorContext,
 }) {
   const [selected, setSelected] = useState(null)
   const [hasAnswered, setHasAnswered] = useState(false)
   const [hasScored, setHasScored] = useState(false)
   const [showHint, setShowHint] = useState(false)
   const [showSimpler, setShowSimpler] = useState(false)
+
+  // Live AI re-explanation state
+  const [reExplain, setReExplain] = useState(null) // string | null
+  const [reExplainLoading, setReExplainLoading] = useState(false)
+
+  async function handleStillDontGetIt() {
+    if (reExplainLoading || !tutorContext) return
+    setReExplainLoading(true)
+    setReExplain(null)
+    try {
+      const res = await fetch('/api/ask-tutor', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...tutorContext,
+          question:
+            "Explain this again in a completely different and simpler way. Use a different analogy. Assume I didn't understand anything.",
+        }),
+      })
+      const data = await res.json()
+      setReExplain(
+        data?.answer ||
+          "Let's try this from a different angle: think of it as a small everyday situation you already know."
+      )
+    } catch {
+      setReExplain("I couldn't reach the tutor right now — try once more in a moment.")
+    } finally {
+      setReExplainLoading(false)
+    }
+  }
 
   function handlePick(option) {
     if (hasAnswered && selected === question.correct_answer) return
@@ -295,6 +371,59 @@ function QuestionBlock({
         )}
       </AnimatePresence>
 
+      {/* "I still don't get it" — live AI re-explanation. Always available. */}
+      {tutorContext && !isCorrect && (
+        <motion.button
+          onClick={handleStillDontGetIt}
+          disabled={reExplainLoading}
+          whileHover={{ scale: 1.01 }}
+          whileTap={{ scale: 0.98 }}
+          className="mt-3 inline-flex items-center gap-2 px-4 py-2.5 rounded-full text-[12px] font-semibold bg-gradient-to-r from-[#f0f7ff] to-[#f5f0ff] text-[#5856D6] border border-[#e1ddff]/70 hover:shadow-[0_4px_16px_rgba(88,86,214,0.15)] transition-all disabled:opacity-60"
+        >
+          <span>✨</span>
+          {reExplainLoading ? 'Rethinking…' : "I still don't get it"}
+        </motion.button>
+      )}
+
+      <AnimatePresence>
+        {(reExplainLoading || reExplain) && (
+          <motion.div
+            initial={{ opacity: 0, y: 6 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 4 }}
+            transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
+            className="mt-3 px-4 py-4 rounded-3xl bg-gradient-to-br from-[#f5f0ff] via-[#f0f7ff] to-[#eaf6ff] border border-[#e1ddff]/60 text-[14px] text-[#1a1a1a] leading-relaxed shadow-[0_2px_12px_rgba(88,86,214,0.08)]"
+          >
+            <p className="text-[10px] font-bold tracking-widest uppercase text-[#5856D6] mb-1.5">
+              Simpler explanation
+            </p>
+            {reExplainLoading ? (
+              <span className="inline-flex items-center gap-2 text-[#8e8e93]">
+                <span className="flex gap-1">
+                  {[0, 1, 2].map((i) => (
+                    <motion.span
+                      key={i}
+                      animate={{ opacity: [0.3, 1, 0.3] }}
+                      transition={{ duration: 1, repeat: Infinity, delay: i * 0.15 }}
+                      className="w-1.5 h-1.5 rounded-full bg-[#5856D6] inline-block"
+                    />
+                  ))}
+                </span>
+                Rethinking from a new angle…
+              </span>
+            ) : (
+              <motion.span
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                transition={{ duration: 0.4 }}
+              >
+                {reExplain}
+              </motion.span>
+            )}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Continue */}
       {isCorrect && onContinue && (
         <motion.button
@@ -324,6 +453,7 @@ function StepCard({
   onCorrect,
   onWrong,
   onContinue,
+  tutorContext,
 }) {
   const typeLabel = {
     concept: 'Concept',
@@ -369,6 +499,7 @@ function StepCard({
           onWrong={onWrong}
           onContinue={onContinue}
           continueLabel={stepIndex + 1 === totalSteps ? 'Finish lesson →' : 'Continue →'}
+          tutorContext={tutorContext}
         />
         <AdaptiveFeedback value={adaptive} onChoose={onAdaptive} />
       </div>
@@ -417,6 +548,65 @@ function AskAI({ profile, selectedClass, selectedSubject, selectedTopic, lesson 
       <p className="text-[11px] font-semibold tracking-widest uppercase text-[#8e8e93] mb-3">
         Ask AI anything about this topic
       </p>
+
+      {/* Chat-style answer area */}
+      <AnimatePresence mode="wait">
+        {question.trim() && (loading || answer) && (
+          <motion.div
+            key="user-bubble"
+            initial={{ opacity: 0, y: 6, scale: 0.97 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
+            className="flex justify-end mb-2"
+          >
+            <div className="max-w-[80%] px-4 py-2.5 rounded-[20px] rounded-br-[6px] text-[13px] leading-relaxed bg-[#007AFF] text-white shadow-sm">
+              {question.trim()}
+            </div>
+          </motion.div>
+        )}
+
+        {loading && (
+          <motion.div
+            key="typing"
+            initial={{ opacity: 0, y: 6 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 4 }}
+            transition={{ duration: 0.25 }}
+            className="flex justify-start mb-2"
+          >
+            <div className="flex items-center gap-1 px-4 py-3 rounded-[20px] rounded-bl-[6px] bg-gradient-to-br from-[#f0f7ff] to-[#f5f0ff] border border-[#e1ddff]/50">
+              {[0, 1, 2].map((i) => (
+                <motion.span
+                  key={i}
+                  animate={{ scale: [1, 1.4, 1], opacity: [0.4, 1, 0.4] }}
+                  transition={{ duration: 1, repeat: Infinity, delay: i * 0.18 }}
+                  className="w-1.5 h-1.5 rounded-full bg-[#5856D6] inline-block"
+                />
+              ))}
+            </div>
+          </motion.div>
+        )}
+
+        {!loading && answer && (
+          <motion.div
+            key="ai-bubble"
+            initial={{ opacity: 0, y: 8, scale: 0.97 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
+            className="flex justify-start mb-3"
+          >
+            <div className="max-w-[88%] px-4 py-3 rounded-[20px] rounded-bl-[6px] bg-gradient-to-br from-[#f0f7ff] to-[#f5f0ff] border border-[#e1ddff]/50 text-[14px] text-[#1a1a1a] leading-relaxed">
+              <p className="text-[10px] font-bold tracking-widest uppercase text-[#5856D6] mb-1.5">
+                AI Tutor
+              </p>
+              {answer}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <form onSubmit={handleAsk} className="flex items-center gap-2">
         <input
           type="text"
@@ -427,30 +617,16 @@ function AskAI({ profile, selectedClass, selectedSubject, selectedTopic, lesson 
           disabled={loading}
           className="flex-1 px-4 py-3 rounded-2xl text-[14px] bg-[#f5f5f7] outline-none text-[#1a1a1a] placeholder-[#aeaeb2] disabled:opacity-50"
         />
-        <button
+        <motion.button
           type="submit"
           disabled={!question.trim() || loading}
-          className="px-4 py-3 rounded-2xl text-[13px] font-semibold text-white bg-[#007AFF] hover:bg-[#0066dd] disabled:opacity-30 active:scale-[0.97] transition-all"
+          whileHover={{ scale: 1.04 }}
+          whileTap={{ scale: 0.96 }}
+          className="px-4 py-3 rounded-2xl text-[13px] font-semibold text-white bg-[#007AFF] hover:bg-[#0066dd] disabled:opacity-30 transition-all"
         >
           {loading ? '…' : 'Ask'}
-        </button>
+        </motion.button>
       </form>
-
-      <AnimatePresence>
-        {(loading || answer) && (
-          <motion.div
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0 }}
-            className="mt-4 px-4 py-3 rounded-2xl bg-gradient-to-br from-[#f0f7ff] to-[#f5f0ff] text-[14px] text-[#1a1a1a] leading-relaxed"
-          >
-            <p className="text-[10px] font-bold tracking-widest uppercase text-[#5856D6] mb-1.5">
-              AI Tutor
-            </p>
-            {loading ? <span className="text-[#8e8e93]">Thinking…</span> : answer}
-          </motion.div>
-        )}
-      </AnimatePresence>
     </div>
   )
 }
@@ -463,6 +639,7 @@ function CompletionScreen({
   correctAnswers,
   wrongAnswers,
   difficultyMode,
+  streak,
   onChallenge,
   onTryAnother,
   onBack,
@@ -483,10 +660,30 @@ function CompletionScreen({
   if (percentage >= 90) resultBadge = '🏆 Mastered'
   else if (percentage >= 60) resultBadge = '🎯 Good Progress'
 
-  const achievements = []
-  if (currentXp >= 40) achievements.push('🏆 Fast Learner')
-  if (correctAnswers === 3) achievements.push('🧠 Problem Solver')
-  if (wrongAnswers === 0) achievements.push('🎯 Consistent Thinker')
+  // Single hero badge — picked by priority (only ONE shown).
+  let heroBadge = null
+  if (correctAnswers === 3) {
+    heroBadge = {
+      icon: '🧠',
+      label: 'Problem Solver',
+      sub: 'Three out of three — flawless reasoning.',
+      gradient: 'from-[#a8c6ff] via-[#b6abff] to-[#c8b4ff]',
+    }
+  } else if (streak >= 3) {
+    heroBadge = {
+      icon: '🔥',
+      label: 'On Fire',
+      sub: `${streak}-day streak — momentum is everything.`,
+      gradient: 'from-[#ffb38a] via-[#ff9580] to-[#ff7e6e]',
+    }
+  } else if (currentXp >= 40) {
+    heroBadge = {
+      icon: '⚡',
+      label: 'Fast Learner',
+      sub: 'Crushed this lesson at full speed.',
+      gradient: 'from-[#ffe28a] via-[#ffd166] to-[#ffb84d]',
+    }
+  }
 
   return (
     <motion.div
@@ -500,9 +697,20 @@ function CompletionScreen({
         <p className="text-[11px] font-semibold tracking-widest uppercase opacity-70 mb-2">Lesson Complete</p>
         <h2 className="text-[26px] font-bold tracking-tight mb-3">{lesson?.title}</h2>
         <div className="flex items-baseline gap-2">
-          <span className="text-[36px] font-bold tracking-tight">{currentXp}</span>
+          <span className="text-[36px] font-bold tracking-tight">
+            <AnimatedNumber value={currentXp} duration={900} />
+          </span>
           <span className="text-[14px] opacity-70">/ {totalXp} XP</span>
           <span className="text-[14px] opacity-70 ml-auto">{percentage}%</span>
+        </div>
+        {/* Animated progress bar */}
+        <div className="mt-3 h-2 bg-white/20 rounded-full overflow-hidden">
+          <motion.div
+            className="h-full bg-white rounded-full"
+            initial={{ width: 0 }}
+            animate={{ width: `${percentage}%` }}
+            transition={{ duration: 1.1, ease: [0.22, 1, 0.36, 1], delay: 0.15 }}
+          />
         </div>
         <div className="mt-4 inline-block px-3 py-1 rounded-full bg-white/20 text-[12px] font-bold">
           {resultBadge}
@@ -513,6 +721,28 @@ function CompletionScreen({
           </div>
         )}
       </div>
+
+      {/* Single hero achievement badge */}
+      {heroBadge && (
+        <motion.div
+          initial={{ opacity: 0, scale: 0.9, y: 16 }}
+          animate={{ opacity: 1, scale: 1, y: 0 }}
+          transition={{ delay: 0.25, duration: 0.55, ease: [0.22, 1, 0.36, 1] }}
+          className={`relative overflow-hidden rounded-3xl p-6 bg-gradient-to-br ${heroBadge.gradient} shadow-[0_10px_30px_rgba(0,0,0,0.12)] text-center`}
+        >
+          <motion.div
+            initial={{ scale: 0.6, rotate: -10, opacity: 0 }}
+            animate={{ scale: 1, rotate: 0, opacity: 1 }}
+            transition={{ delay: 0.4, type: 'spring', stiffness: 220, damping: 14 }}
+            className="text-[64px] leading-none mb-2"
+          >
+            {heroBadge.icon}
+          </motion.div>
+          <p className="text-[11px] font-bold tracking-widest uppercase text-white/80">Achievement unlocked</p>
+          <h3 className="text-[24px] font-bold tracking-tight text-white mt-1">{heroBadge.label}</h3>
+          <p className="text-[13px] text-white/85 mt-1.5 leading-snug max-w-[280px] mx-auto">{heroBadge.sub}</p>
+        </motion.div>
+      )}
 
       {/* Stats card */}
       <div className="bg-white rounded-3xl p-5 shadow-[0_2px_12px_rgba(0,0,0,0.06)]">
@@ -532,20 +762,6 @@ function CompletionScreen({
           </div>
         </div>
       </div>
-
-      {/* Achievement badges */}
-      {achievements.length > 0 && (
-        <div className="bg-white rounded-3xl p-5 shadow-[0_2px_12px_rgba(0,0,0,0.06)]">
-          <p className="text-[11px] font-semibold tracking-widest uppercase text-[#8e8e93] mb-3">Achievements</p>
-          <div className="flex flex-wrap gap-2">
-            {achievements.map((a) => (
-              <span key={a} className="px-3 py-1.5 rounded-full bg-gradient-to-r from-[#eaf4ff] via-[#efeaff] to-[#e9fff3] text-[12px] font-bold text-[#4656a3] border border-[#d8e6ff]/70">
-                {a}
-              </span>
-            ))}
-          </div>
-        </div>
-      )}
 
       {/* Final + study tip */}
       {(lesson?.final_message || lesson?.study_tip) && (
@@ -689,6 +905,10 @@ export default function LessonView({
   const [phase, setPhase] = useState('lesson') // 'lesson' | 'complete' | 'challenge' | 'challenge-done'
   const [bonusXp, setBonusXp] = useState(0)
 
+  // Floating "+10 XP" toast state — re-fires on every gain.
+  const [xpToast, setXpToast] = useState({ amount: 0, id: 0 })
+  const [confettiKey, setConfettiKey] = useState(0)
+
   // Live progress (XP/streak/daily) — re-read on mount and after completions.
   const [progress, setProgress] = useState(() => getProgress(profile?.userId))
 
@@ -697,13 +917,40 @@ export default function LessonView({
   const difficultyMode =
     correctAnswers >= 3 ? 'harder' : wrongAnswers >= 2 ? 'simpler' : 'normal'
 
+  // Style-aware personalized intro shown before Step 1.
+  const personalizedIntro = useMemo(() => {
+    const style = profile?.learning_style || 'mixed'
+    const opener = STYLE_INTRO[style] || STYLE_INTRO.mixed
+    return `${opener} let's explore ${selectedTopic} together.`
+  }, [profile?.learning_style, selectedTopic])
+
+  const tutorContext = useMemo(
+    () => ({ profile, selectedClass, selectedSubject, selectedTopic, lesson }),
+    [profile, selectedClass, selectedSubject, selectedTopic, lesson],
+  )
+
+  function fireXpToast(amount) {
+    if (!amount) return
+    setXpToast((prev) => ({ amount, id: prev.id + 1 }))
+    // Clear toast after animation completes so it can re-trigger.
+    setTimeout(() => {
+      setXpToast((prev) => (prev.amount === amount ? { amount: 0, id: prev.id } : prev))
+    }, 1100)
+  }
+
   function handleCorrect(xp) {
     setCurrentXp((prev) => prev + xp)
     setCorrectAnswers((c) => c + 1)
+    fireXpToast(xp)
   }
 
   function handleWrong() {
     setWrongAnswers((w) => w + 1)
+  }
+
+  function handleChallengeCorrect(xp) {
+    setBonusXp((b) => b + xp)
+    fireXpToast(xp)
   }
 
   function handleAdaptive(stepId, value) {
@@ -743,8 +990,35 @@ export default function LessonView({
       selectedClass,
       selectedSubject,
       selectedTopic,
+      correctAnswers,
+      wrongAnswers,
+      percentage,
     })
     setProgress(updated)
+
+    // Persist XP/streak snapshot to Firestore so friends can see it.
+    syncUserSnapshot(profile?.userId, profile?.username, updated)
+
+    // Fire celebration confetti once on first completion.
+    setConfettiKey((k) => k + 1)
+
+    // Activity log for "friends are learning" feed (best-effort).
+    ;(async () => {
+      try {
+        await addDoc(collection(db, 'activities'), {
+          uid: profile?.userId || profile?.username || 'anonymous',
+          username: profile?.username || 'Someone',
+          type: 'lesson_completed',
+          selectedClass,
+          selectedSubject,
+          selectedTopic,
+          xpEarned: totalEarned,
+          createdAt: serverTimestamp(),
+        })
+      } catch (err) {
+        console.warn('activities Firestore save skipped:', err.message)
+      }
+    })()
 
     ;(async () => {
       try {
@@ -810,7 +1084,14 @@ export default function LessonView({
         dailyXp={progress.dailyXp}
         streak={progress.streak}
         onBack={onBack}
+        xpPulseKey={xpToast.id}
       />
+
+      {/* Floating "+XP" toast — fires on every gain */}
+      <XpToast amount={xpToast.amount} id={xpToast.id} />
+
+      {/* Confetti — fires once on lesson completion */}
+      {confettiKey > 0 && <Confetti key={confettiKey} active />}
 
       <div className="max-w-lg mx-auto px-5 pt-5 relative space-y-4">
         {/* Title + intro — only shown during the active lesson */}
@@ -826,10 +1107,25 @@ export default function LessonView({
             <p className="text-[13px] text-[#6e6e73]">
               {lesson.estimated_time} · {selectedSubject} · {selectedClass}
             </p>
-            {stepIndex === 0 && lesson.intro && (
-              <p className="mt-3 text-[14px] text-[#1a1a1a] leading-relaxed bg-white rounded-3xl p-4 shadow-[0_2px_12px_rgba(0,0,0,0.05)]">
-                {lesson.intro}
-              </p>
+            {stepIndex === 0 && (
+              <motion.div
+                initial={{ opacity: 0, y: 12, scale: 0.98 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                transition={{ duration: 0.55, ease: [0.22, 1, 0.36, 1], delay: 0.05 }}
+                className="mt-4 relative overflow-hidden rounded-3xl p-5 bg-gradient-to-br from-[#f0f7ff] via-[#f5f0ff] to-[#eaf6ff] border border-[#e1ddff]/50 shadow-[0_2px_16px_rgba(88,86,214,0.08)]"
+              >
+                <div className="flex items-center gap-2 mb-2">
+                  <div className="w-7 h-7 rounded-full bg-gradient-to-br from-[#007AFF] to-[#5856D6] flex items-center justify-center text-white text-[12px] font-bold shadow-sm">
+                    ✨
+                  </div>
+                  <p className="text-[10px] font-bold tracking-widest uppercase text-[#5856D6]">
+                    AI Tutor · personalized for you
+                  </p>
+                </div>
+                <p className="text-[15px] text-[#1a1a1a] leading-relaxed font-medium">
+                  {personalizedIntro}
+                </p>
+              </motion.div>
             )}
           </motion.div>
         )}
@@ -847,6 +1143,7 @@ export default function LessonView({
               onCorrect={handleCorrect}
               onWrong={handleWrong}
               onContinue={handleContinue}
+              tutorContext={tutorContext}
             />
           )}
 
@@ -858,6 +1155,7 @@ export default function LessonView({
               correctAnswers={correctAnswers}
               wrongAnswers={wrongAnswers}
               difficultyMode={difficultyMode}
+              streak={progress.streak}
               hasChallengeAvailable={!!lesson.challenge_mode?.questions?.length}
               challengeDone={false}
               bonusXp={bonusXp}
@@ -877,7 +1175,7 @@ export default function LessonView({
               key="challenge"
               challenge={lesson.challenge_mode}
               bonusXp={bonusXp}
-              onCorrect={(xp) => setBonusXp((b) => b + xp)}
+              onCorrect={handleChallengeCorrect}
               onWrong={() => {}}
               onDone={() => setPhase('challenge-done')}
             />
@@ -891,6 +1189,7 @@ export default function LessonView({
               correctAnswers={correctAnswers}
               wrongAnswers={wrongAnswers}
               difficultyMode={difficultyMode}
+              streak={progress.streak}
               hasChallengeAvailable={false}
               challengeDone={true}
               bonusXp={bonusXp}

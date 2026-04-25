@@ -14,6 +14,11 @@ const DEFAULTS = {
   lastClass: null,
   lastSubject: null,
   lastTopic: null,
+  // Most recent lesson outcome — used to drive next-lesson recommendation.
+  lastCorrect: 0,
+  lastWrong: 0,
+  lastPercentage: 0,
+  lastXpEarned: 0,
 }
 
 function todayKey() {
@@ -69,7 +74,16 @@ export function getProgress(userId) {
 }
 
 // Adds XP earned from a single lesson completion. Updates streak + last lesson.
-export function addLessonProgress({ userId, xpEarned = 0, selectedClass, selectedSubject, selectedTopic }) {
+export function addLessonProgress({
+  userId,
+  xpEarned = 0,
+  selectedClass,
+  selectedSubject,
+  selectedTopic,
+  correctAnswers = 0,
+  wrongAnswers = 0,
+  percentage = 0,
+}) {
   const today = todayKey()
   let state = rolloverDaily(readRaw(userId))
 
@@ -91,6 +105,10 @@ export function addLessonProgress({ userId, xpEarned = 0, selectedClass, selecte
   state.lastClass = selectedClass || state.lastClass
   state.lastSubject = selectedSubject || state.lastSubject
   state.lastTopic = selectedTopic || state.lastTopic
+  state.lastCorrect = correctAnswers
+  state.lastWrong = wrongAnswers
+  state.lastPercentage = percentage
+  state.lastXpEarned = xpEarned
 
   writeRaw(userId, state)
   return state

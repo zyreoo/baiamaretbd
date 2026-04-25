@@ -1,10 +1,24 @@
 'use client'
 
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { db } from '@/lib/firebase'
-import { addDoc, collection, doc, serverTimestamp, updateDoc } from 'firebase/firestore'
+import {
+  addDoc,
+  collection,
+  doc,
+  getDocs,
+  limit,
+  orderBy,
+  query,
+  serverTimestamp,
+  updateDoc,
+  where,
+} from 'firebase/firestore'
 import LessonView from './LessonView'
+import BottomNav from './BottomNav'
+import FriendsScreen from './FriendsScreen'
+import HistoryScreen from './HistoryScreen'
 import { DAILY_GOAL_XP, getProgress } from '@/lib/progressStore'
 
 // ─── Curriculum data ───────────────────────────────────────────────────────────
@@ -437,6 +451,211 @@ function LessonLoading() {
   )
 }
 
+// ─── Recommendation logic ──────────────────────────────────────────────────────
+
+// Returns the next class/subject/topic to suggest based on the learner's last lesson.
+// Uses simple rules — no AI needed:
+//   - many wrong answers → suggest an easier topic in the same subject (earlier in list)
+//   - did well → suggest the next harder topic
+//   - else → suggest the next topic in the same subject
+function buildRecommendation(progress, profile) {
+  const { lastClass, lastSubject, lastTopic, lastWrong = 0, lastPercentage = 0 } = progress || {}
+
+  // Cold start: pick the first topic in the first subject of the user's class (or Class 5).
+  if (!lastClass || !lastSubject || !lastTopic) {
+    const cls = profile?.class_level && curriculum[profile.class_level] ? profile.class_level : 'Class 5'
+    const firstSubject = Object.keys(curriculum[cls])[0]
+    const firstTopic = curriculum[cls][firstSubject][0]
+    return {
+      cls,
+      subject: firstSubject,
+      topic: firstTopic,
+      reason: 'Start a quick first lesson tailored to your learning style.',
+      mood: 'fresh',
+    }
+  }
+
+  const subjectTopics = curriculum[lastClass]?.[lastSubject] || []
+  const idx = subjectTopics.indexOf(lastTopic)
+
+  let mood = 'next'
+  let nextTopic = null
+  let reason = ''
+
+  if (lastWrong >= 2 || lastPercentage < 50) {
+    // Easier: previous topic in the list (or stay if at the start).
+    nextTopic = idx > 0 ? subjectTopics[idx - 1] : subjectTopics[0]
+    reason = `Let's reinforce the basics first — try ${lastSubject} → ${nextTopic}.`
+    mood = 'easier'
+  } else if (lastPercentage >= 80) {
+    // Harder: next topic in the list (or wrap to first if at end).
+    nextTopic = idx >= 0 && idx + 1 < subjectTopics.length ? subjectTopics[idx + 1] : subjectTopics[0]
+    reason = `You're crushing it — step up to ${lastSubject} → ${nextTopic}.`
+    mood = 'harder'
+  } else {
+    nextTopic =
+      idx >= 0 && idx + 1 < subjectTopics.length ? subjectTopics[idx + 1] : subjectTopics[0]
+    reason = `Keep your momentum — try ${lastSubject} → ${nextTopic}.`
+    mood = 'next'
+  }
+
+  return { cls: lastClass, subject: lastSubject, topic: nextTopic, reason, mood }
+}
+
+function RecommendedCard({ recommendation, onPick }) {
+  if (!recommendation) return null
+  const { cls, subject, topic, reason, mood } = recommendation
+  const emoji = SUBJECT_EMOJI[subject] || '📚'
+
+  const moodGradient = {
+    fresh: 'from-[#7ab6ff] via-[#8a88ff] to-[#77d9ba]',
+    easier: 'from-[#5dc6ff] via-[#7ab6ff] to-[#8a88ff]',
+    next: 'from-[#7ab6ff] via-[#8a88ff] to-[#a07bff]',
+    harder: 'from-[#ff8e6e] via-[#ff7e8a] to-[#a07bff]',
+  }[mood] || 'from-[#7ab6ff] via-[#8a88ff] to-[#77d9ba]'
+
+  return (
+    <motion.button
+      initial={{ opacity: 0, y: 12 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ delay: 0.18, duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
+      whileHover={{ scale: 1.01, y: -1 }}
+      whileTap={{ scale: 0.99 }}
+      onClick={() => onPick(cls, subject, topic)}
+      className={`relative overflow-hidden w-full text-left rounded-3xl p-5 text-white bg-gradient-to-br ${moodGradient} shadow-[0_10px_30px_rgba(95,130,255,0.25)] hover:shadow-[0_14px_36px_rgba(95,130,255,0.32)] transition-shadow`}
+    >
+      {/* Decorative bubble */}
+      <div className="absolute -top-12 -right-12 w-40 h-40 rounded-full bg-white/10 blur-2xl pointer-events-none" />
+
+      <div className="relative">
+        <div className="flex items-center justify-between mb-3">
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white/20 text-[10px] font-bold tracking-widest uppercase">
+            ✨ Recommended for you
+          </span>
+          <span className="text-[24px]">{emoji}</span>
+        </div>
+        <h3 className="text-[20px] font-bold tracking-tight leading-tight">
+          {subject} · {topic}
+        </h3>
+        <p className="text-[13px] opacity-85 mt-1.5 leading-relaxed">{reason}</p>
+        <div className="mt-4 flex items-center justify-between">
+          <span className="text-[11px] opacity-75 font-medium">{cls}</span>
+          <span className="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-white/20 text-[12px] font-bold">
+            Start lesson →
+          </span>
+        </div>
+      </div>
+    </motion.button>
+  )
+}
+
+// ─── Friend activity feed ──────────────────────────────────────────────────────
+
+function timeAgo(date) {
+  if (!date) return ''
+  const now = Date.now()
+  const then = date instanceof Date ? date.getTime() : date.toDate?.().getTime() || 0
+  const diff = Math.max(0, now - then)
+  const m = Math.floor(diff / 60000)
+  if (m < 1) return 'just now'
+  if (m < 60) return `${m}m ago`
+  const h = Math.floor(m / 60)
+  if (h < 24) return `${h}h ago`
+  const d = Math.floor(h / 24)
+  return `${d}d ago`
+}
+
+function activityLabel(a) {
+  const name = a.username || 'Someone'
+  const subject = a.selectedSubject || 'a topic'
+  if (a.type === 'lesson_completed' && a.selectedTopic) {
+    return `${name} completed ${subject}: ${a.selectedTopic}`
+  }
+  if (a.xpEarned) {
+    return `${name} earned ${a.xpEarned} XP in ${subject}`
+  }
+  return `${name} is learning ${subject}`
+}
+
+const AVATAR_GRADIENTS = [
+  'from-[#7ab6ff] to-[#5856D6]',
+  'from-[#ff8e6e] to-[#ff5e7a]',
+  'from-[#5dc6ff] to-[#34c759]',
+  'from-[#ffb84d] to-[#ff7e6e]',
+  'from-[#a07bff] to-[#5856D6]',
+]
+
+function avatarStyle(name) {
+  const idx = (String(name || 'X').charCodeAt(0) || 0) % AVATAR_GRADIENTS.length
+  return AVATAR_GRADIENTS[idx]
+}
+
+function FriendActivity({ activities, loading }) {
+  return (
+    <motion.section
+      initial={{ opacity: 0, y: 12 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ delay: 0.22, duration: 0.45 }}
+    >
+      <div className="flex items-center justify-between mb-3">
+        <p className="text-[11px] font-semibold tracking-widest uppercase text-[#8e8e93]">
+          Your friends are learning
+        </p>
+        {!loading && activities.length > 0 && (
+          <span className="text-[10px] font-bold text-[#5856D6] bg-gradient-to-r from-[#e8f4ff] to-[#ede8ff] px-2 py-0.5 rounded-full">
+            LIVE
+          </span>
+        )}
+      </div>
+
+      {loading ? (
+        <div className="space-y-2">
+          {[0, 1, 2].map((i) => (
+            <div
+              key={i}
+              className="h-14 rounded-2xl bg-white/70 animate-pulse shadow-[0_2px_10px_rgba(0,0,0,0.04)]"
+            />
+          ))}
+        </div>
+      ) : activities.length === 0 ? (
+        <div className="rounded-3xl p-5 bg-white shadow-[0_2px_12px_rgba(0,0,0,0.06)] text-center">
+          <div className="text-2xl mb-1.5">👥</div>
+          <p className="text-[14px] font-semibold text-[#1a1a1a]">See what other learners are doing</p>
+          <p className="text-[12px] text-[#8e8e93] mt-1">Activity from your community will appear here.</p>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {activities.map((a, i) => {
+            const initial = (a.username || '?')[0].toUpperCase()
+            return (
+              <motion.div
+                key={a.id || i}
+                initial={{ opacity: 0, x: -8 }}
+                animate={{ opacity: 1, x: 0 }}
+                transition={{ delay: 0.25 + i * 0.05, duration: 0.35 }}
+                whileHover={{ scale: 1.005 }}
+                className="flex items-center gap-3 p-3 rounded-2xl bg-white shadow-[0_2px_10px_rgba(0,0,0,0.05)] hover:shadow-[0_4px_16px_rgba(0,0,0,0.08)] transition-shadow"
+              >
+                <div
+                  className={`w-10 h-10 rounded-full bg-gradient-to-br ${avatarStyle(a.username)} flex items-center justify-center text-white text-[14px] font-bold flex-shrink-0 shadow-sm`}
+                >
+                  {initial}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-[13px] font-medium text-[#1a1a1a] leading-snug truncate">
+                    {activityLabel(a)}
+                  </p>
+                  <p className="text-[11px] text-[#8e8e93] mt-0.5">{timeAgo(a.createdAt)}</p>
+                </div>
+              </motion.div>
+            )
+          })}
+        </div>
+      )}
+    </motion.section>
+  )
+}
+
 // ─── Dashboard (main export) ───────────────────────────────────────────────────
 
 export default function Dashboard({ profile, onLogout }) {
@@ -447,8 +666,67 @@ export default function Dashboard({ profile, onLogout }) {
   const [lessonState, setLessonState] = useState(null)
   const [progress, setProgress] = useState(() => getProgress(profile?.userId))
 
+  // Active tab: 'learn' | 'friends' | 'history'
+  const [tab, setTab] = useState('learn')
+
+  // Friend activity feed (best-effort: silently empty if Firestore is not reachable).
+  const [activities, setActivities] = useState([])
+  const [activitiesLoading, setActivitiesLoading] = useState(true)
+
+  // Pending friend-request count — drives the badge on the Friends tab icon.
+  const [pendingCount, setPendingCount] = useState(0)
+
   const subjectSectionRef = useRef(null)
   const topicSectionRef = useRef(null)
+
+  const recommendation = buildRecommendation(progress, profile)
+
+  // Load recent activity feed once on mount.
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        const snap = await getDocs(
+          query(collection(db, 'activities'), orderBy('createdAt', 'desc'), limit(5)),
+        )
+        if (cancelled) return
+        const items = snap.docs.map((d) => ({ id: d.id, ...d.data() }))
+        setActivities(items)
+      } catch (err) {
+        console.warn('activities Firestore load skipped:', err.message)
+        if (!cancelled) setActivities([])
+      } finally {
+        if (!cancelled) setActivitiesLoading(false)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  // Count pending incoming friend requests for the badge.
+  useEffect(() => {
+    const uid = profile?.userId
+    if (!uid) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const snap = await getDocs(
+          query(
+            collection(db, 'friend_requests'),
+            where('toUid', '==', uid),
+            where('status', '==', 'pending'),
+          ),
+        )
+        if (!cancelled) setPendingCount(snap.size)
+      } catch {
+        /* silently ignore */
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [profile?.userId])
 
   const learningStyle = profile?.learning_style || 'mixed'
   const styleHint = STYLE_HINT[learningStyle] || STYLE_HINT.mixed
@@ -539,6 +817,16 @@ export default function Dashboard({ profile, onLogout }) {
     setProgress(getProgress(profile?.userId))
   }
 
+  function handlePickRecommendation(cls, subject, topic) {
+    setSelectedClass(cls)
+    setSelectedSubject(subject)
+    setSelectedTopic(topic)
+    setLessonState(null)
+    if (typeof window !== 'undefined') {
+      window.scrollTo({ top: 0, behavior: 'smooth' })
+    }
+  }
+
   function handleTryAnotherTopic() {
     setLessonState(null)
     setSelectedTopic(null)
@@ -584,145 +872,176 @@ export default function Dashboard({ profile, onLogout }) {
   }
 
   return (
-    <motion.div
-      key="dashboard"
-      initial={{ opacity: 0, y: 24 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: -16 }}
-      transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
-      className="min-h-screen bg-[#f5f5f7] pb-20"
-    >
-      {/* Background decoration blobs */}
-      <div className="fixed inset-0 pointer-events-none overflow-hidden">
-        <div className="absolute -top-40 -right-40 w-96 h-96 rounded-full bg-gradient-to-br from-blue-100/60 to-purple-100/60 blur-3xl" />
-        <div className="absolute -bottom-40 -left-40 w-80 h-80 rounded-full bg-gradient-to-tr from-indigo-100/40 to-blue-100/40 blur-3xl" />
-      </div>
-
-      {/* Sticky header */}
-      <div className="sticky top-0 z-20 bg-white/80 backdrop-blur-xl border-b border-[#e8e8ed] px-5 py-4">
-        <div className="max-w-lg mx-auto flex items-center gap-3">
-          <div className="w-10 h-10 rounded-full bg-gradient-to-br from-[#007AFF] to-[#5856D6] flex items-center justify-center text-white text-[15px] font-bold shadow-sm flex-shrink-0">
-            {avatarLetter}
-          </div>
-          <div className="flex-1 min-w-0">
-            <p className="text-[15px] font-semibold text-[#1a1a1a] truncate">Welcome back, {profile?.username}</p>
-            <p className="text-[12px] text-[#8e8e93]">Let&apos;s choose what you want to learn today.</p>
-          </div>
-          <button
-            onClick={onLogout}
-            className="text-[13px] text-[#8e8e93] hover:text-[#1a1a1a] transition-colors px-3 py-1.5 rounded-xl hover:bg-[#f0f0f5] flex-shrink-0"
-          >
-            Logout
-          </button>
-        </div>
-      </div>
-
-      <div className="max-w-lg mx-auto px-5 pt-6 space-y-8 relative">
-        {/* Learner type badge */}
-        <motion.div
-          initial={{ opacity: 0, y: 8 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.1, duration: 0.4 }}
-        >
-          <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-gradient-to-r from-[#e8f4ff] to-[#ede8ff] text-[12px] font-semibold text-[#5856D6]">
-            <span className="w-1.5 h-1.5 rounded-full bg-[#5856D6]" />
-            {learnerType}
-          </span>
-        </motion.div>
-
-        {/* Daily progress / streak / total XP overview */}
-        <motion.div
-          initial={{ opacity: 0, y: 12 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.15, duration: 0.45 }}
-          className="bg-white rounded-3xl p-5 shadow-[0_2px_12px_rgba(0,0,0,0.06)]"
-        >
-          <div className="flex items-center justify-between mb-3">
-            <div>
-              <p className="text-[11px] font-semibold tracking-widest uppercase text-[#8e8e93]">Daily goal</p>
-              <p className="text-[15px] font-bold text-[#1a1a1a] mt-0.5">{progress.dailyXp} / {DAILY_GOAL_XP} XP</p>
-            </div>
-            <div className="flex gap-2">
-              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-[#fff3e8] text-[12px] font-bold text-[#c66800]">
-                🔥 {progress.streak}
-              </span>
-              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-gradient-to-r from-[#e8f4ff] to-[#ede8ff] text-[12px] font-bold text-[#5856D6]">
-                ⚡ {progress.totalXp}
-              </span>
-            </div>
-          </div>
-          <div className="h-2 bg-[#eef0f4] rounded-full overflow-hidden">
-            <motion.div
-              className="h-full bg-gradient-to-r from-[#34c759] to-[#30b454] rounded-full"
-              initial={{ width: 0 }}
-              animate={{ width: `${Math.min(100, Math.round((progress.dailyXp / DAILY_GOAL_XP) * 100))}%` }}
-              transition={{ duration: 0.6, ease: 'easeOut' }}
-            />
-          </div>
-          {progress.lastTopic && (
-            <p className="text-[12px] text-[#8e8e93] mt-3">
-              Last lesson: <span className="text-[#1a1a1a] font-semibold">{progress.lastTopic}</span>
-              {progress.lastSubject ? ` · ${progress.lastSubject}` : ''}
-              {progress.lastClass ? ` · ${progress.lastClass}` : ''}
-            </p>
-          )}
-        </motion.div>
-
-        {/* Step progress bar */}
-        {step && (
+    <>
+      <AnimatePresence mode="wait">
+        {tab === 'learn' && (
           <motion.div
-            key={`step-${step}`}
-            initial={{ opacity: 0, x: 10 }}
-            animate={{ opacity: 1, x: 0 }}
-            transition={{ duration: 0.3 }}
-            className="flex items-center gap-2"
+            key="dashboard"
+            initial={{ opacity: 0, y: 24 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -16 }}
+            transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
+            className="min-h-screen bg-[#f5f5f7] pb-32"
           >
-            {[1, 2, 3].map((s) => (
-              <div
-                key={s}
-                className={`h-1.5 rounded-full transition-all duration-500 ${
-                  s === step
-                    ? 'w-8 bg-[#007AFF]'
-                    : s < step
-                    ? 'w-4 bg-[#007AFF]/40'
-                    : 'w-4 bg-[#e0e0e5]'
-                }`}
-              />
-            ))}
-            <span className="text-[12px] text-[#8e8e93] ml-1">Step {step} of 3</span>
+            {/* Background decoration blobs */}
+            <div className="fixed inset-0 pointer-events-none overflow-hidden">
+              <div className="absolute -top-40 -right-40 w-96 h-96 rounded-full bg-gradient-to-br from-blue-100/60 to-purple-100/60 blur-3xl" />
+              <div className="absolute -bottom-40 -left-40 w-80 h-80 rounded-full bg-gradient-to-tr from-indigo-100/40 to-blue-100/40 blur-3xl" />
+            </div>
+
+            {/* Sticky header */}
+            <div className="sticky top-0 z-20 bg-white/80 backdrop-blur-xl border-b border-[#e8e8ed] px-5 py-4">
+              <div className="max-w-lg mx-auto flex items-center gap-3">
+                <div className="w-10 h-10 rounded-full bg-gradient-to-br from-[#007AFF] to-[#5856D6] flex items-center justify-center text-white text-[15px] font-bold shadow-sm flex-shrink-0">
+                  {avatarLetter}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-[15px] font-semibold text-[#1a1a1a] truncate">Welcome back, {profile?.username}</p>
+                  <p className="text-[12px] text-[#8e8e93]">Let&apos;s choose what you want to learn today.</p>
+                </div>
+                <button
+                  onClick={onLogout}
+                  className="text-[13px] text-[#8e8e93] hover:text-[#1a1a1a] transition-colors px-3 py-1.5 rounded-xl hover:bg-[#f0f0f5] flex-shrink-0"
+                >
+                  Logout
+                </button>
+              </div>
+            </div>
+
+            <div className="max-w-lg mx-auto px-5 pt-6 space-y-8 relative">
+              {/* Learner type badge */}
+              <motion.div
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.1, duration: 0.4 }}
+              >
+                <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-gradient-to-r from-[#e8f4ff] to-[#ede8ff] text-[12px] font-semibold text-[#5856D6]">
+                  <span className="w-1.5 h-1.5 rounded-full bg-[#5856D6]" />
+                  {learnerType}
+                </span>
+              </motion.div>
+
+              {/* Daily progress / streak / total XP overview */}
+              <motion.div
+                initial={{ opacity: 0, y: 12 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.15, duration: 0.45 }}
+                className="bg-white rounded-3xl p-5 shadow-[0_2px_12px_rgba(0,0,0,0.06)]"
+              >
+                <div className="flex items-center justify-between mb-3">
+                  <div>
+                    <p className="text-[11px] font-semibold tracking-widest uppercase text-[#8e8e93]">Daily goal</p>
+                    <p className="text-[15px] font-bold text-[#1a1a1a] mt-0.5">{progress.dailyXp} / {DAILY_GOAL_XP} XP</p>
+                  </div>
+                  <div className="flex gap-2">
+                    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-[#fff3e8] text-[12px] font-bold text-[#c66800]">
+                      🔥 {progress.streak}
+                    </span>
+                    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-gradient-to-r from-[#e8f4ff] to-[#ede8ff] text-[12px] font-bold text-[#5856D6]">
+                      ⚡ {progress.totalXp}
+                    </span>
+                  </div>
+                </div>
+                <div className="h-2 bg-[#eef0f4] rounded-full overflow-hidden">
+                  <motion.div
+                    className="h-full bg-gradient-to-r from-[#34c759] to-[#30b454] rounded-full"
+                    initial={{ width: 0 }}
+                    animate={{ width: `${Math.min(100, Math.round((progress.dailyXp / DAILY_GOAL_XP) * 100))}%` }}
+                    transition={{ duration: 0.6, ease: 'easeOut' }}
+                  />
+                </div>
+                {progress.lastTopic && (
+                  <p className="text-[12px] text-[#8e8e93] mt-3">
+                    Last lesson: <span className="text-[#1a1a1a] font-semibold">{progress.lastTopic}</span>
+                    {progress.lastSubject ? ` · ${progress.lastSubject}` : ''}
+                    {progress.lastClass ? ` · ${progress.lastClass}` : ''}
+                  </p>
+                )}
+              </motion.div>
+
+              {/* Recommended for you */}
+              <RecommendedCard recommendation={recommendation} onPick={handlePickRecommendation} />
+
+              {/* Friends are learning */}
+              <FriendActivity activities={activities} loading={activitiesLoading} />
+
+              {/* Step progress bar */}
+              {step && (
+                <motion.div
+                  key={`step-${step}`}
+                  initial={{ opacity: 0, x: 10 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{ duration: 0.3 }}
+                  className="flex items-center gap-2"
+                >
+                  {[1, 2, 3].map((s) => (
+                    <div
+                      key={s}
+                      className={`h-1.5 rounded-full transition-all duration-500 ${
+                        s === step
+                          ? 'w-8 bg-[#007AFF]'
+                          : s < step
+                          ? 'w-4 bg-[#007AFF]/40'
+                          : 'w-4 bg-[#e0e0e5]'
+                      }`}
+                    />
+                  ))}
+                  <span className="text-[12px] text-[#8e8e93] ml-1">Step {step} of 3</span>
+                </motion.div>
+              )}
+
+              {/* Class selector — always visible */}
+              <ClassSelector selectedClass={selectedClass} onSelect={handleSelectClass} />
+
+              {/* Subject selector — appears after class chosen */}
+              <AnimatePresence>
+                {selectedClass && (
+                  <SubjectSelector
+                    key={`subjects-${selectedClass}`}
+                    subjects={subjects}
+                    selectedSubject={selectedSubject}
+                    onSelect={handleSelectSubject}
+                    sectionRef={subjectSectionRef}
+                  />
+                )}
+              </AnimatePresence>
+
+              {/* Topic selector — appears after subject chosen */}
+              <AnimatePresence>
+                {selectedSubject && (
+                  <TopicSelector
+                    key={`topics-${selectedClass}-${selectedSubject}`}
+                    topics={topics}
+                    selectedTopic={selectedTopic}
+                    onSelect={handleSelectTopic}
+                    styleHint={styleHint}
+                    sectionRef={topicSectionRef}
+                  />
+                )}
+              </AnimatePresence>
+            </div>
           </motion.div>
         )}
 
-        {/* Class selector — always visible */}
-        <ClassSelector selectedClass={selectedClass} onSelect={handleSelectClass} />
+        {tab === 'friends' && (
+          <FriendsScreen key="friends" profile={profile} />
+        )}
 
-        {/* Subject selector — appears after class chosen */}
-        <AnimatePresence>
-          {selectedClass && (
-            <SubjectSelector
-              key={`subjects-${selectedClass}`}
-              subjects={subjects}
-              selectedSubject={selectedSubject}
-              onSelect={handleSelectSubject}
-              sectionRef={subjectSectionRef}
-            />
-          )}
-        </AnimatePresence>
+        {tab === 'history' && (
+          <HistoryScreen key="history" profile={profile} />
+        )}
+      </AnimatePresence>
 
-        {/* Topic selector — appears after subject chosen */}
-        <AnimatePresence>
-          {selectedSubject && (
-            <TopicSelector
-              key={`topics-${selectedClass}-${selectedSubject}`}
-              topics={topics}
-              selectedTopic={selectedTopic}
-              onSelect={handleSelectTopic}
-              styleHint={styleHint}
-              sectionRef={topicSectionRef}
-            />
-          )}
-        </AnimatePresence>
-      </div>
-    </motion.div>
+      {/* Bottom navigation — shared across all tabs */}
+      <BottomNav
+        activeTab={tab}
+        onChange={(t) => {
+          setTab(t)
+          // Refresh pending count when switching to/from friends
+          if (t === 'friends') setPendingCount(0)
+        }}
+        friendBadge={pendingCount}
+      />
+    </>
   )
 }
