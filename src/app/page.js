@@ -52,21 +52,12 @@ export default function Home() {
 
         if (!existingProfileSnapshot.empty) {
           setProfile(existingProfileSnapshot.docs[0].data())
+          setScreen(SCREENS.PROFILE)
         } else {
-          setProfile({
-            username: name,
-            learner_type: 'Returning Learner',
-            summary: 'Welcome back. Your account is ready to continue.',
-            learning_style: 'mixed',
-            motivation_type: 'goals',
-            pace: 'consistent',
-            support_style: 'examples',
-            strengths: ['Consistency'],
-            challenges: ['None yet'],
-          })
+          // Existing credentials but no completed onboarding profile yet.
+          // Continue onboarding instead of skipping directly to dashboard.
+          setScreen(SCREENS.CHAT)
         }
-
-        setScreen(SCREENS.PROFILE)
         return
       }
     } finally {

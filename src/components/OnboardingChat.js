@@ -32,12 +32,8 @@ export default function OnboardingChat({ username, onComplete }) {
   const [inputLocked, setInputLocked] = useState(true)
   const bottomRef = useRef(null)
   const inputRef = useRef(null)
-  const hasInitializedRef = useRef(false)
 
   useEffect(() => {
-    if (hasInitializedRef.current) return
-    hasInitializedRef.current = true
-
     let isCancelled = false
 
     const greet = async () => {
