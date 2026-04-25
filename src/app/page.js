@@ -7,7 +7,7 @@ import OnboardingChat from '@/components/OnboardingChat'
 import ProfileCard from '@/components/ProfileCard'
 import { generateProfile } from '@/lib/generateProfile'
 import { db } from '@/lib/firebase'
-import { collection, addDoc } from 'firebase/firestore'
+import { collection, addDoc, getDocs, limit, query, where } from 'firebase/firestore'
 
 const SCREENS = {
   LOGIN: 'login',
@@ -19,9 +19,60 @@ export default function Home() {
   const [screen, setScreen] = useState(SCREENS.LOGIN)
   const [username, setUsername] = useState('')
   const [profile, setProfile] = useState(null)
+  const [isCheckingUser, setIsCheckingUser] = useState(false)
 
-  function handleLogin(name) {
+  async function handleLogin(name, password) {
+    setIsCheckingUser(true)
     setUsername(name)
+
+    try {
+      const authRes = await fetch('/api/auth', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          username: name,
+          password,
+        }),
+      })
+
+      const authData = await authRes.json()
+      if (!authRes.ok) {
+        throw new Error(authData.error || 'Unable to continue')
+      }
+
+      if (authData.userExists) {
+        const existingProfileQuery = query(
+          collection(db, 'learner_profiles'),
+          where('username', '==', name),
+          limit(1),
+        )
+        const existingProfileSnapshot = await getDocs(existingProfileQuery)
+
+        if (!existingProfileSnapshot.empty) {
+          setProfile(existingProfileSnapshot.docs[0].data())
+        } else {
+          setProfile({
+            username: name,
+            learner_type: 'Returning Learner',
+            summary: 'Welcome back. Your account is ready to continue.',
+            learning_style: 'mixed',
+            motivation_type: 'goals',
+            pace: 'consistent',
+            support_style: 'examples',
+            strengths: ['Consistency'],
+            challenges: ['None yet'],
+          })
+        }
+
+        setScreen(SCREENS.PROFILE)
+        return
+      }
+    } finally {
+      setIsCheckingUser(false)
+    }
+
     setScreen(SCREENS.CHAT)
   }
 
@@ -49,7 +100,11 @@ export default function Home() {
     <main>
       <AnimatePresence mode="wait">
         {screen === SCREENS.LOGIN && (
-          <LoginScreen key="login" onContinue={handleLogin} />
+          <LoginScreen
+            key="login"
+            onContinue={handleLogin}
+            isChecking={isCheckingUser}
+          />
         )}
         {screen === SCREENS.CHAT && (
           <OnboardingChat key="chat" username={username} onComplete={handleChatComplete} />

@@ -1,17 +1,57 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 
-export default function LoginScreen({ onContinue }) {
+export default function LoginScreen({ onContinue, isChecking }) {
   const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
   const [focused, setFocused] = useState(false)
+  const [usernameStatus, setUsernameStatus] = useState('idle')
+  const [submitError, setSubmitError] = useState('')
 
-  function handleSubmit(e) {
-    e.preventDefault()
+  useEffect(() => {
     const trimmed = username.trim()
+
     if (!trimmed) return
-    onContinue(trimmed)
+
+    const controller = new AbortController()
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch(
+          `/api/check-username?username=${encodeURIComponent(trimmed)}`,
+          { signal: controller.signal },
+        )
+        if (!res.ok) {
+          setUsernameStatus('error')
+          return
+        }
+        const data = await res.json()
+        setUsernameStatus(data.exists ? 'exists' : 'available')
+      } catch (error) {
+        if (error.name !== 'AbortError') {
+          setUsernameStatus('error')
+        }
+      }
+    }, 400)
+
+    return () => {
+      controller.abort()
+      clearTimeout(timer)
+    }
+  }, [username])
+
+  async function handleSubmit(e) {
+    e.preventDefault()
+    const trimmedUsername = username.trim()
+    if (!trimmedUsername || !password) return
+
+    setSubmitError('')
+    try {
+      await onContinue(trimmedUsername, password)
+    } catch (error) {
+      setSubmitError(error.message || 'Unable to continue')
+    }
   }
 
   return (
@@ -74,7 +114,12 @@ export default function LoginScreen({ onContinue }) {
             <input
               type="text"
               value={username}
-              onChange={(e) => setUsername(e.target.value)}
+              onChange={(e) => {
+                const nextUsername = e.target.value
+                setUsername(nextUsername)
+                setUsernameStatus(nextUsername.trim() ? 'checking' : 'idle')
+                setSubmitError('')
+              }}
               onFocus={() => setFocused(true)}
               onBlur={() => setFocused(false)}
               placeholder="Your username"
@@ -85,13 +130,39 @@ export default function LoginScreen({ onContinue }) {
             />
           </div>
 
+          {usernameStatus === 'exists' && (
+            <p className="text-[12px] text-[#b26a00] px-1">Username already exists</p>
+          )}
+          {usernameStatus === 'available' && (
+            <p className="text-[12px] text-[#2e7d32] px-1">Username available</p>
+          )}
+
+          <div className="rounded-2xl shadow-[0_1px_6px_rgba(0,0,0,0.07)] bg-white">
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => {
+                setPassword(e.target.value)
+                setSubmitError('')
+              }}
+              placeholder="Password"
+              minLength={6}
+              autoComplete="off"
+              className="w-full px-5 py-4 text-[15px] bg-transparent rounded-2xl outline-none text-[#1a1a1a] placeholder-[#c0c0c5]"
+            />
+          </div>
+
           <button
             type="submit"
-            disabled={!username.trim()}
+            disabled={!username.trim() || !password || isChecking}
             className="w-full py-4 rounded-2xl text-[15px] font-semibold text-white bg-[#007AFF] transition-all duration-200 hover:bg-[#0066dd] active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed shadow-[0_4px_14px_rgba(0,122,255,0.3)]"
           >
-            Continue
+            {isChecking ? 'Checking...' : 'Continue'}
           </button>
+
+          {submitError && (
+            <p className="text-[12px] text-[#d02f2f] px-1">{submitError}</p>
+          )}
         </motion.form>
 
         <motion.p
@@ -100,7 +171,7 @@ export default function LoginScreen({ onContinue }) {
           transition={{ delay: 0.5 }}
           className="text-center text-[12px] text-[#aeaeb2] mt-8"
         >
-          No sign-up required. Just your name.
+          Use your username and password to sign in or create an account.
         </motion.p>
       </div>
     </motion.div>

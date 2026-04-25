@@ -32,22 +32,39 @@ export default function OnboardingChat({ username, onComplete }) {
   const [inputLocked, setInputLocked] = useState(true)
   const bottomRef = useRef(null)
   const inputRef = useRef(null)
+  const hasInitializedRef = useRef(false)
 
   useEffect(() => {
+    if (hasInitializedRef.current) return
+    hasInitializedRef.current = true
+
+    let isCancelled = false
+
     const greet = async () => {
       await delay(500)
+      if (isCancelled) return
       setIsTyping(true)
       await delay(900)
+      if (isCancelled) return
       setIsTyping(false)
       setMessages([{ role: 'ai', text: `Hey ${username}! I want to understand what kind of learner you are.` }])
       await delay(300)
+      if (isCancelled) return
       setIsTyping(true)
       await delay(1100)
+      if (isCancelled) return
       setIsTyping(false)
-      setMessages((prev) => [...prev, { role: 'ai', text: QUESTIONS[0] }])
+      setMessages((prev) => {
+        if (prev.some((msg) => msg.role === 'ai' && msg.text === QUESTIONS[0])) return prev
+        return [...prev, { role: 'ai', text: QUESTIONS[0] }]
+      })
       setInputLocked(false)
     }
     greet()
+
+    return () => {
+      isCancelled = true
+    }
   }, [username])
 
   useEffect(() => {
