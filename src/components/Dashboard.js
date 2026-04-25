@@ -1,10 +1,11 @@
 'use client'
 
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { db } from '@/lib/firebase'
 import { addDoc, collection, doc, serverTimestamp, updateDoc } from 'firebase/firestore'
 import LessonView from './LessonView'
+import { DAILY_GOAL_XP, getProgress } from '@/lib/progressStore'
 
 // ─── Curriculum data ───────────────────────────────────────────────────────────
 
@@ -444,9 +445,14 @@ export default function Dashboard({ profile, onLogout }) {
   const [selectedTopic, setSelectedTopic] = useState(null)
   // lessonState: null | { status: 'loading' } | { status: 'ready', lesson: {} } | { status: 'error', message: string }
   const [lessonState, setLessonState] = useState(null)
+  const [progress, setProgress] = useState({ totalXp: 0, dailyXp: 0, streak: 0, lastTopic: null, lastSubject: null, lastClass: null })
 
   const subjectSectionRef = useRef(null)
   const topicSectionRef = useRef(null)
+
+  useEffect(() => {
+    setProgress(getProgress())
+  }, [])
 
   const learningStyle = profile?.learning_style || 'mixed'
   const styleHint = STYLE_HINT[learningStyle] || STYLE_HINT.mixed
@@ -534,6 +540,13 @@ export default function Dashboard({ profile, onLogout }) {
 
   function handleBackFromLesson() {
     setLessonState(null)
+    setProgress(getProgress())
+  }
+
+  function handleTryAnotherTopic() {
+    setLessonState(null)
+    setSelectedTopic(null)
+    setProgress(getProgress())
   }
 
   // Loading screen
@@ -546,10 +559,12 @@ export default function Dashboard({ profile, onLogout }) {
     return (
       <LessonView
         lesson={lessonState.lesson}
+        profile={profile}
         selectedClass={selectedClass}
         selectedSubject={selectedSubject}
         selectedTopic={selectedTopic}
         onBack={handleBackFromLesson}
+        onTryAnother={handleTryAnotherTopic}
       />
     )
   }
@@ -617,6 +632,44 @@ export default function Dashboard({ profile, onLogout }) {
             <span className="w-1.5 h-1.5 rounded-full bg-[#5856D6]" />
             {learnerType}
           </span>
+        </motion.div>
+
+        {/* Daily progress / streak / total XP overview */}
+        <motion.div
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.15, duration: 0.45 }}
+          className="bg-white rounded-3xl p-5 shadow-[0_2px_12px_rgba(0,0,0,0.06)]"
+        >
+          <div className="flex items-center justify-between mb-3">
+            <div>
+              <p className="text-[11px] font-semibold tracking-widest uppercase text-[#8e8e93]">Daily goal</p>
+              <p className="text-[15px] font-bold text-[#1a1a1a] mt-0.5">{progress.dailyXp} / {DAILY_GOAL_XP} XP</p>
+            </div>
+            <div className="flex gap-2">
+              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-[#fff3e8] text-[12px] font-bold text-[#c66800]">
+                🔥 {progress.streak}
+              </span>
+              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-gradient-to-r from-[#e8f4ff] to-[#ede8ff] text-[12px] font-bold text-[#5856D6]">
+                ⚡ {progress.totalXp}
+              </span>
+            </div>
+          </div>
+          <div className="h-2 bg-[#eef0f4] rounded-full overflow-hidden">
+            <motion.div
+              className="h-full bg-gradient-to-r from-[#34c759] to-[#30b454] rounded-full"
+              initial={{ width: 0 }}
+              animate={{ width: `${Math.min(100, Math.round((progress.dailyXp / DAILY_GOAL_XP) * 100))}%` }}
+              transition={{ duration: 0.6, ease: 'easeOut' }}
+            />
+          </div>
+          {progress.lastTopic && (
+            <p className="text-[12px] text-[#8e8e93] mt-3">
+              Last lesson: <span className="text-[#1a1a1a] font-semibold">{progress.lastTopic}</span>
+              {progress.lastSubject ? ` · ${progress.lastSubject}` : ''}
+              {progress.lastClass ? ` · ${progress.lastClass}` : ''}
+            </p>
+          )}
         </motion.div>
 
         {/* Step progress bar */}
