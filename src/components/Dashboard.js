@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { db } from '@/lib/firebase'
 import { addDoc, collection, doc, serverTimestamp, updateDoc } from 'firebase/firestore'
@@ -112,7 +112,7 @@ function ClassSelector({ selectedClass, onSelect }) {
   return (
     <motion.section variants={sectionVariants} initial="hidden" animate="visible">
       <p className="text-[11px] font-semibold tracking-widest uppercase text-[#8e8e93] mb-3">
-        Choose your class
+        Choose the class you want to study
       </p>
       <div className="grid grid-cols-4 gap-2">
         {CLASSES.map((cls) => {
@@ -273,7 +273,7 @@ function LearningPreview({
           </div>
           <div className="flex-1 min-w-0">
             <p className="text-[15px] font-semibold text-[#1a1a1a] truncate">Welcome back, {profile?.username}</p>
-            <p className="text-[12px] text-[#8e8e93]">Let's choose what you want to learn today.</p>
+            <p className="text-[12px] text-[#8e8e93]">Let&apos;s choose what you want to learn today.</p>
           </div>
           <button
             onClick={onLogout}
@@ -445,14 +445,10 @@ export default function Dashboard({ profile, onLogout }) {
   const [selectedTopic, setSelectedTopic] = useState(null)
   // lessonState: null | { status: 'loading' } | { status: 'ready', lesson: {} } | { status: 'error', message: string }
   const [lessonState, setLessonState] = useState(null)
-  const [progress, setProgress] = useState({ totalXp: 0, dailyXp: 0, streak: 0, lastTopic: null, lastSubject: null, lastClass: null })
+  const [progress, setProgress] = useState(() => getProgress(profile?.userId))
 
   const subjectSectionRef = useRef(null)
   const topicSectionRef = useRef(null)
-
-  useEffect(() => {
-    setProgress(getProgress())
-  }, [])
 
   const learningStyle = profile?.learning_style || 'mixed'
   const styleHint = STYLE_HINT[learningStyle] || STYLE_HINT.mixed
@@ -521,7 +517,7 @@ export default function Dashboard({ profile, onLogout }) {
       // Optionally save to Firestore
       try {
         await addDoc(collection(db, 'generated_lessons'), {
-          uid: profile?.username || 'anonymous',
+          uid: profile?.userId || profile?.username || 'anonymous',
           selectedClass,
           selectedSubject,
           selectedTopic,
@@ -540,13 +536,13 @@ export default function Dashboard({ profile, onLogout }) {
 
   function handleBackFromLesson() {
     setLessonState(null)
-    setProgress(getProgress())
+    setProgress(getProgress(profile?.userId))
   }
 
   function handleTryAnotherTopic() {
     setLessonState(null)
     setSelectedTopic(null)
-    setProgress(getProgress())
+    setProgress(getProgress(profile?.userId))
   }
 
   // Loading screen

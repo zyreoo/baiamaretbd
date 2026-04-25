@@ -128,11 +128,6 @@ export default function OnboardingChat({ username, onComplete }) {
     } else {
       await delay(1000)
       setIsTyping(false)
-      setMessages((prev) => [...prev, { role: 'ai', text: 'AI is learning from your answer.' }])
-      await delay(300)
-      setIsTyping(true)
-      await delay(900)
-      setIsTyping(false)
       const nextPrompt = nextState.currentQuestion.prompt
       setMessages((prev) => {
         if (!nextPrompt) return prev

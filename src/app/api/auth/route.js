@@ -24,24 +24,30 @@ export async function POST(request) {
     const existingUserSnapshot = await getDocs(existingUserQuery)
 
     if (!existingUserSnapshot.empty) {
-      const existingUser = existingUserSnapshot.docs[0].data()
+      const existingUserDoc = existingUserSnapshot.docs[0]
+      const existingUser = existingUserDoc.data()
       const isValidPassword = await bcrypt.compare(password, existingUser.passwordHash)
 
       if (!isValidPassword) {
         return NextResponse.json({ error: 'Invalid username or password' }, { status: 401 })
       }
 
-      return NextResponse.json({ ok: true, userExists: true, username })
+      return NextResponse.json({ ok: true, userExists: true, username, userId: existingUserDoc.id })
     }
 
     const passwordHash = await bcrypt.hash(password, 10)
-    await addDoc(collection(db, 'users'), {
+    const createdUserRef = await addDoc(collection(db, 'users'), {
       username,
       passwordHash,
       createdAt: new Date(),
     })
 
-    return NextResponse.json({ ok: true, userExists: false, username })
+    return NextResponse.json({
+      ok: true,
+      userExists: false,
+      username,
+      userId: createdUserRef.id,
+    })
   } catch (error) {
     return NextResponse.json(
       { error: 'Unable to authenticate user' },

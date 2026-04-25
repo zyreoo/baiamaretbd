@@ -20,6 +20,7 @@ const SCREENS = {
 export default function Home() {
   const [screen, setScreen] = useState(SCREENS.LOGIN)
   const [username, setUsername] = useState('')
+  const [userId, setUserId] = useState('')
   const [profile, setProfile] = useState(null)
   const [isCheckingUser, setIsCheckingUser] = useState(false)
 
@@ -38,18 +39,42 @@ export default function Home() {
       if (!authRes.ok) {
         throw new Error(authData.error || 'Unable to continue')
       }
+      setUserId(authData.userId || '')
 
       if (authData.userExists) {
-        const existingProfileQuery = query(
-          collection(db, 'learner_profiles'),
-          where('username', '==', name),
-          limit(1),
+        let existingProfileSnapshot = await getDocs(
+          query(
+            collection(db, 'learner_profiles'),
+            where('userId', '==', authData.userId),
+            limit(1),
+          ),
         )
-        const existingProfileSnapshot = await getDocs(existingProfileQuery)
+
+        // Backward compatibility for profiles created before userId existed.
+        if (existingProfileSnapshot.empty) {
+          existingProfileSnapshot = await getDocs(
+            query(
+              collection(db, 'learner_profiles'),
+              where('username', '==', name),
+              limit(1),
+            ),
+          )
+        }
 
         if (!existingProfileSnapshot.empty) {
           const docSnap = existingProfileSnapshot.docs[0]
-          setProfile({ ...docSnap.data(), _docId: docSnap.id })
+          // Backfill stable userId to old profile docs.
+          if (!docSnap.data()?.userId && authData.userId) {
+            try {
+              await updateDoc(doc(db, 'learner_profiles', docSnap.id), {
+                userId: authData.userId,
+                lastUpdatedAt: new Date(),
+              })
+            } catch (err) {
+              console.warn('Could not backfill userId on profile:', err.message)
+            }
+          }
+          setProfile({ ...docSnap.data(), _docId: docSnap.id, userId: authData.userId })
           // Returning user with a finished profile → go straight to the dashboard
           setScreen(SCREENS.DASHBOARD)
           return
@@ -67,11 +92,12 @@ export default function Home() {
 
   async function handleChatComplete(onboardingData) {
     const generated = generateProfile(username, onboardingData)
+    const profileWithUser = { ...generated, userId }
 
     let docId = null
     try {
       const docRef = await addDoc(collection(db, 'learner_profiles'), {
-        ...generated,
+        ...profileWithUser,
         createdAt: new Date(),
       })
       docId = docRef.id
@@ -79,7 +105,7 @@ export default function Home() {
       console.warn('Firestore save skipped (check env vars):', err.message)
     }
 
-    setProfile({ ...generated, _docId: docId })
+    setProfile({ ...profileWithUser, _docId: docId })
     setScreen(SCREENS.PROFILE)
   }
 
@@ -90,6 +116,7 @@ export default function Home() {
   function handleLogout() {
     setProfile(null)
     setUsername('')
+    setUserId('')
     setScreen(SCREENS.LOGIN)
   }
 
@@ -110,7 +137,7 @@ export default function Home() {
           <ProfileCard key="profile" profile={profile} onStartLearning={handleStartLearning} />
         )}
         {screen === SCREENS.DASHBOARD && profile && (
-          <Dashboard key="dashboard" profile={profile} onLogout={handleLogout} />
+          <Dashboard key={`dashboard-${profile.userId || profile.username}`} profile={profile} onLogout={handleLogout} />
         )}
       </AnimatePresence>
     </main>

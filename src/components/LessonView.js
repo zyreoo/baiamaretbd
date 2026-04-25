@@ -496,7 +496,7 @@ function CompletionScreen({
       className="space-y-4"
     >
       {/* Hero card */}
-      <div className="bg-gradient-to-br from-[#007AFF] to-[#5856D6] rounded-3xl p-6 text-white shadow-[0_8px_32px_rgba(0,122,255,0.25)]">
+      <div className="bg-gradient-to-br from-[#7ab6ff] via-[#8a88ff] to-[#77d9ba] rounded-3xl p-6 text-white shadow-[0_10px_30px_rgba(95,130,255,0.25)]">
         <p className="text-[11px] font-semibold tracking-widest uppercase opacity-70 mb-2">Lesson Complete</p>
         <h2 className="text-[26px] font-bold tracking-tight mb-3">{lesson?.title}</h2>
         <div className="flex items-baseline gap-2">
@@ -539,7 +539,7 @@ function CompletionScreen({
           <p className="text-[11px] font-semibold tracking-widest uppercase text-[#8e8e93] mb-3">Achievements</p>
           <div className="flex flex-wrap gap-2">
             {achievements.map((a) => (
-              <span key={a} className="px-3 py-1.5 rounded-full bg-gradient-to-r from-[#fff8e8] to-[#fff3d6] text-[12px] font-bold text-[#7a5500] border border-[#ffe0a0]/60">
+              <span key={a} className="px-3 py-1.5 rounded-full bg-gradient-to-r from-[#eaf4ff] via-[#efeaff] to-[#e9fff3] text-[12px] font-bold text-[#4656a3] border border-[#d8e6ff]/70">
                 {a}
               </span>
             ))}
@@ -557,9 +557,9 @@ function CompletionScreen({
             </p>
           )}
           {lesson?.study_tip && (
-            <div className="px-4 py-3 rounded-2xl bg-gradient-to-br from-[#fff8e8] to-[#fff3d6] border border-[#ffe0a0]/60">
-              <p className="text-[10px] font-bold tracking-widest uppercase text-[#b07d00] mb-1">Study tip</p>
-              <p className="text-[13px] text-[#7a5500] leading-relaxed">{lesson.study_tip}</p>
+            <div className="px-4 py-3 rounded-2xl bg-gradient-to-br from-[#edf6ff] via-[#f3efff] to-[#ecfff5] border border-[#dce9ff]/80">
+              <p className="text-[10px] font-bold tracking-widest uppercase text-[#5b61b6] mb-1">Study tip</p>
+              <p className="text-[13px] text-[#374b7c] leading-relaxed">{lesson.study_tip}</p>
             </div>
           )}
         </div>
@@ -581,7 +581,7 @@ function CompletionScreen({
             whileHover={{ scale: 1.01 }}
             whileTap={{ scale: 0.98 }}
             onClick={onChallenge}
-            className="w-full py-4 rounded-2xl text-[15px] font-semibold text-white bg-gradient-to-br from-[#FF9500] to-[#ff5e3a] transition-all hover:opacity-95 shadow-[0_4px_20px_rgba(255,149,0,0.3)]"
+            className="w-full py-4 rounded-2xl text-[15px] font-semibold text-white bg-gradient-to-br from-[#5d8dff] to-[#7c6cff] transition-all hover:opacity-95 shadow-[0_4px_20px_rgba(95,130,255,0.3)]"
           >
             Challenge yourself 🔥
           </motion.button>
@@ -589,7 +589,7 @@ function CompletionScreen({
         <motion.button
           whileTap={{ scale: 0.98 }}
           onClick={onTryAnother}
-          className="w-full py-4 rounded-2xl text-[15px] font-semibold text-white bg-[#1a1a1a] hover:bg-black transition-all"
+          className="w-full py-4 rounded-2xl text-[15px] font-semibold text-white bg-gradient-to-r from-[#4f8dff] to-[#6e75ff] hover:opacity-95 transition-all"
         >
           Try Another Topic
         </motion.button>
@@ -690,10 +690,7 @@ export default function LessonView({
   const [bonusXp, setBonusXp] = useState(0)
 
   // Live progress (XP/streak/daily) — re-read on mount and after completions.
-  const [progress, setProgress] = useState({ totalXp: 0, dailyXp: 0, streak: 0 })
-  useEffect(() => {
-    setProgress(getProgress())
-  }, [])
+  const [progress, setProgress] = useState(() => getProgress(profile?.userId))
 
   const savedRef = useRef(false)
 
@@ -741,6 +738,7 @@ export default function LessonView({
     if (wrongAnswers === 0) achievementBadges.push('🎯 Consistent Thinker')
 
     const updated = addLessonProgress({
+      userId: profile?.userId,
       xpEarned: totalEarned,
       selectedClass,
       selectedSubject,
@@ -751,7 +749,7 @@ export default function LessonView({
     ;(async () => {
       try {
         await addDoc(collection(db, 'lesson_progress'), {
-          uid: profile?.username || 'anonymous',
+          uid: profile?.userId || profile?.username || 'anonymous',
           selectedClass,
           selectedSubject,
           selectedTopic,
