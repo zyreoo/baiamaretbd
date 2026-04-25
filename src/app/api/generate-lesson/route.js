@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 
 const HACKCLUB_API = 'https://ai.hackclub.com/proxy/v1/chat/completions'
 const MODEL = 'qwen/qwen3-32b'
-const AI_TIMEOUT_MS = 25000
+const AI_TIMEOUT_MS = 32000
 
 function compactProfile(profile) {
   return {
@@ -35,6 +35,74 @@ Requirements:
 - Keep content short and demo-ready (2-3 sentences max).
 - Match learning_style in tone and examples.
 - Return valid JSON only, no markdown fences.`
+}
+
+function buildCompactRetryPrompt(profile, selectedClass, selectedSubject, selectedTopic) {
+  return `Return ONLY valid minified JSON for a lesson.
+profile=${JSON.stringify(compactProfile(profile))}
+class=${selectedClass}; subject=${selectedSubject}; topic=${selectedTopic}
+
+Schema:
+{
+"title":string,"intro":string,"estimated_time":"3-5 min","total_xp":45,
+"steps":[
+ {"id":1,"type":"concept","title":string,"content":string,"question":{"text":string,"options":[string,string,string],"correct_answer":string,"xp":10,"feedback_correct":string,"feedback_wrong":string,"hint":string,"simpler_explanation":string}},
+ {"id":2,"type":"example","title":string,"content":string,"question":{"text":string,"options":[string,string,string],"correct_answer":string,"xp":15,"feedback_correct":string,"feedback_wrong":string,"hint":string,"simpler_explanation":string}},
+ {"id":3,"type":"practice","title":string,"content":string,"question":{"text":string,"options":[string,string,string],"correct_answer":string,"xp":20,"feedback_correct":string,"feedback_wrong":string,"hint":string,"simpler_explanation":string}}
+],
+"challenge_mode":{"title":string,"description":string,"total_bonus_xp":60,"questions":[
+ {"text":string,"options":[string,string,string],"correct_answer":string,"xp":30,"feedback_correct":string,"feedback_wrong":string,"hint":string},
+ {"text":string,"options":[string,string,string],"correct_answer":string,"xp":30,"feedback_correct":string,"feedback_wrong":string,"hint":string}
+]},
+"final_message":string,"study_tip":string
+}
+No markdown. No commentary.`
+}
+
+function extractMessageContent(rawResponseText) {
+  // Provider payload (OpenAI-style envelope)
+  try {
+    const aiData = JSON.parse(rawResponseText)
+    const messageContent = aiData?.choices?.[0]?.message?.content
+    if (typeof messageContent === 'string' && messageContent.trim()) {
+      return messageContent.trim()
+    }
+    // Sometimes providers return the lesson object directly.
+    if (aiData && typeof aiData === 'object' && aiData.title && aiData.steps) {
+      return JSON.stringify(aiData)
+    }
+  } catch {
+    // ignore and continue to raw extraction below
+  }
+
+  // Raw text fallback (already JSON string or text containing JSON).
+  return String(rawResponseText || '').trim()
+}
+
+function parseLessonFromContent(rawContent) {
+  const cleaned = String(rawContent || '')
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/, '')
+    .trim()
+
+  if (!cleaned) return null
+
+  // First attempt: direct JSON parse.
+  try {
+    return JSON.parse(cleaned)
+  } catch {
+    // Second attempt: parse first JSON object in mixed text.
+    const jsonStart = cleaned.indexOf('{')
+    const jsonEnd = cleaned.lastIndexOf('}')
+    if (jsonStart >= 0 && jsonEnd > jsonStart) {
+      try {
+        return JSON.parse(cleaned.slice(jsonStart, jsonEnd + 1))
+      } catch {
+        return null
+      }
+    }
+    return null
+  }
 }
 
 function fallbackLesson(selectedTopic, selectedSubject, profile) {
@@ -169,75 +237,67 @@ export async function POST(request) {
       return NextResponse.json({ lesson: fallbackLesson(selectedTopic, selectedSubject, profile) })
     }
 
-    const controller = new AbortController()
-    timeoutId = setTimeout(() => controller.abort(), AI_TIMEOUT_MS)
+    async function requestLesson({ compact = false }) {
+      const controller = new AbortController()
+      timeoutId = setTimeout(() => controller.abort(), AI_TIMEOUT_MS)
+      const aiResponse = await fetch(HACKCLUB_API, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        signal: controller.signal,
+        body: JSON.stringify({
+          model: MODEL,
+          messages: [
+            {
+              role: 'system',
+              content:
+                'You are a friendly AI tutor for students. Create short, clear, personalized, gamified lessons. Keep language simple, encouraging, and age-appropriate. Always return valid JSON only — no markdown, no commentary.',
+            },
+            {
+              role: 'user',
+              content: compact
+                ? buildCompactRetryPrompt(profile, selectedClass, selectedSubject, selectedTopic)
+                : buildPrompt(profile, selectedClass, selectedSubject, selectedTopic),
+            },
+          ],
+          temperature: compact ? 0.2 : 0.35,
+          max_tokens: compact ? 1200 : 1800,
+          response_format: { type: 'json_object' },
+        }),
+      })
+      clearTimeout(timeoutId)
 
-    const aiResponse = await fetch(HACKCLUB_API, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      signal: controller.signal,
-      body: JSON.stringify({
-        model: MODEL,
-        messages: [
-          {
-            role: 'system',
-            content:
-              'You are a friendly AI tutor for students. Create short, clear, personalized, gamified lessons. Keep language simple, encouraging, and age-appropriate. Always return valid JSON only — no markdown, no commentary.',
-          },
-          {
-            role: 'user',
-            content: buildPrompt(profile, selectedClass, selectedSubject, selectedTopic),
-          },
-        ],
-        temperature: 0.35,
-        max_tokens: 1400,
-      }),
-    })
-    clearTimeout(timeoutId)
-
-    if (!aiResponse.ok) {
-      const errText = await aiResponse.text()
-      console.error('Hack Club AI error:', errText)
-      return NextResponse.json({ lesson: fallbackLesson(selectedTopic, selectedSubject, profile) })
-    }
-
-    const rawResponseText = await aiResponse.text()
-    let rawContent = ''
-
-    try {
-      const aiData = JSON.parse(rawResponseText)
-      rawContent = aiData?.choices?.[0]?.message?.content || ''
-    } catch {
-      // If provider returns non-JSON text, we still fall back gracefully.
-      console.warn('AI returned non-JSON payload. Raw head:', rawResponseText.slice(0, 120))
-      return NextResponse.json({ lesson: fallbackLesson(selectedTopic, selectedSubject, profile) })
-    }
-
-    const cleaned = rawContent
-      .replace(/^```(?:json)?\s*/i, '')
-      .replace(/\s*```$/, '')
-      .trim()
-
-    let lesson
-    try {
-      lesson = JSON.parse(cleaned)
-    } catch {
-      // Try to salvage JSON object if the model wrapped it with extra text.
-      try {
-        const jsonStart = cleaned.indexOf('{')
-        const jsonEnd = cleaned.lastIndexOf('}')
-        if (jsonStart >= 0 && jsonEnd > jsonStart) {
-          lesson = JSON.parse(cleaned.slice(jsonStart, jsonEnd + 1))
-        } else {
-          throw new Error('No JSON object bounds found')
-        }
-      } catch {
-        console.warn('Could not parse AI JSON response — using fallback. Raw:', rawContent.slice(0, 300))
-        lesson = fallbackLesson(selectedTopic, selectedSubject, profile)
+      if (!aiResponse.ok) {
+        const errText = await aiResponse.text()
+        throw new Error(`Hack Club AI error: ${errText.slice(0, 180)}`)
       }
+
+      const rawResponseText = await aiResponse.text()
+      const rawContent = extractMessageContent(rawResponseText)
+      return parseLessonFromContent(rawContent)
+    }
+
+    let lesson = null
+    try {
+      lesson = await requestLesson({ compact: false })
+    } catch (err) {
+      console.warn('Primary lesson request failed:', err.message)
+    }
+
+    // Retry once with compact prompt if parsing failed.
+    if (!lesson) {
+      try {
+        lesson = await requestLesson({ compact: true })
+      } catch (err) {
+        console.warn('Retry lesson request failed:', err.message)
+      }
+    }
+
+    if (!lesson) {
+      console.warn('Could not parse AI JSON response after retry — using fallback lesson.')
+      lesson = fallbackLesson(selectedTopic, selectedSubject, profile)
     }
 
     // Light sanity check — if the model omitted the new structure, fall back

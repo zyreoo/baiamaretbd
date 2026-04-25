@@ -233,6 +233,8 @@ function QuestionBlock({
   // Live AI re-explanation state
   const [reExplain, setReExplain] = useState(null) // string | null
   const [reExplainLoading, setReExplainLoading] = useState(false)
+  const [visualLoading, setVisualLoading] = useState(false)
+  const [visualResults, setVisualResults] = useState([])
   const shuffledOptions = useMemo(() => {
     const opts = Array.isArray(question?.options) ? [...question.options] : []
     for (let i = opts.length - 1; i > 0; i--) {
@@ -265,6 +267,34 @@ function QuestionBlock({
       setReExplain("I couldn't reach the tutor right now — try once more in a moment.")
     } finally {
       setReExplainLoading(false)
+    }
+  }
+
+  async function handleShowVisual() {
+    if (visualLoading || !tutorContext) return
+    setVisualLoading(true)
+    setVisualResults([])
+    try {
+      const query = [
+        tutorContext?.selectedSubject,
+        tutorContext?.selectedTopic,
+        question?.text,
+        'diagram',
+      ]
+        .filter(Boolean)
+        .join(' ')
+
+      const res = await fetch('/api/image-search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query }),
+      })
+      const data = await res.json()
+      setVisualResults(Array.isArray(data?.images) ? data.images.slice(0, 5) : [])
+    } catch {
+      setVisualResults([])
+    } finally {
+      setVisualLoading(false)
     }
   }
 
@@ -417,18 +447,31 @@ function QuestionBlock({
         )}
       </AnimatePresence>
 
-      {/* "I still don't get it" — live AI re-explanation. Always available. */}
+      {/* "I still don't get it" — live AI re-explanation + visual search */}
       {tutorContext && !isCorrect && (
-        <motion.button
-          onClick={handleStillDontGetIt}
-          disabled={reExplainLoading}
-          whileHover={{ scale: 1.01 }}
-          whileTap={{ scale: 0.98 }}
-          className="mt-3 inline-flex items-center gap-2 px-4 py-2.5 rounded-full text-[12px] font-semibold bg-gradient-to-r from-[#f0f7ff] to-[#f5f0ff] text-[#5856D6] border border-[#e1ddff]/70 hover:shadow-[0_4px_16px_rgba(88,86,214,0.15)] transition-all disabled:opacity-60"
-        >
-          <span>✨</span>
-          {reExplainLoading ? 'Rethinking…' : "I still don't get it"}
-        </motion.button>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <motion.button
+            onClick={handleStillDontGetIt}
+            disabled={reExplainLoading}
+            whileHover={{ scale: 1.01 }}
+            whileTap={{ scale: 0.98 }}
+            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-full text-[12px] font-semibold bg-gradient-to-r from-[#f0f7ff] to-[#f5f0ff] text-[#5856D6] border border-[#e1ddff]/70 hover:shadow-[0_4px_16px_rgba(88,86,214,0.15)] transition-all disabled:opacity-60"
+          >
+            <span>✨</span>
+            {reExplainLoading ? 'Rethinking…' : "I still don't get it"}
+          </motion.button>
+
+          <motion.button
+            onClick={handleShowVisual}
+            disabled={visualLoading}
+            whileHover={{ scale: 1.01 }}
+            whileTap={{ scale: 0.98 }}
+            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-full text-[12px] font-semibold bg-gradient-to-r from-[#eafbf2] to-[#eef8ff] text-[#1d7a40] border border-[#cfeedd] hover:shadow-[0_4px_16px_rgba(52,199,89,0.15)] transition-all disabled:opacity-60"
+          >
+            <span>🖼️</span>
+            {visualLoading ? 'Finding images…' : 'Show visually'}
+          </motion.button>
+        </div>
       )}
 
       <AnimatePresence>
@@ -465,6 +508,55 @@ function QuestionBlock({
               >
                 {reExplain}
               </motion.span>
+            )}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {(visualLoading || visualResults.length > 0) && (
+          <motion.div
+            initial={{ opacity: 0, y: 6 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 4 }}
+            transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
+            className="mt-3"
+          >
+            <p className="text-[10px] font-bold tracking-widest uppercase text-[#34a15d] mb-2 px-1">
+              Visual examples
+            </p>
+            {visualLoading ? (
+              <div className="px-4 py-3 rounded-2xl bg-[#f0fff6] text-[13px] text-[#3b7f58]">
+                Looking for useful diagrams...
+              </div>
+            ) : visualResults.length === 0 ? (
+              <div className="px-4 py-3 rounded-2xl bg-[#f5f5f7] text-[13px] text-[#8e8e93]">
+                Couldn&apos;t find visuals right now. Try again in a moment.
+              </div>
+            ) : (
+              <div className="flex gap-3 overflow-x-auto pb-1 snap-x">
+                {visualResults.map((img, idx) => (
+                  <button
+                    key={`${img.url || idx}`}
+                    onClick={() => {
+                      if (img?.sourceUrl) window.open(img.sourceUrl, '_blank', 'noopener,noreferrer')
+                    }}
+                    className="min-w-[180px] max-w-[180px] snap-start text-left rounded-2xl bg-white border border-[#e8e8ed] shadow-[0_2px_10px_rgba(0,0,0,0.05)] overflow-hidden"
+                  >
+                    <div className="w-full h-[110px] bg-[#eef0f4]">
+                      {img?.url && (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={img.url} alt={img.title || 'visual example'} className="w-full h-full object-cover" />
+                      )}
+                    </div>
+                    <div className="p-2.5">
+                      <p className="text-[12px] font-semibold text-[#1a1a1a] line-clamp-2">
+                        {img.title || 'Visual example'}
+                      </p>
+                    </div>
+                  </button>
+                ))}
+              </div>
             )}
           </motion.div>
         )}
