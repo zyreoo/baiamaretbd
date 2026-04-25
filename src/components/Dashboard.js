@@ -721,7 +721,7 @@ export default function Dashboard({ profile, onLogout }) {
 
   const recommendation = buildRecommendation(progress, profile)
 
-  // Load recent activity feed once on mount — excludes the current user's own entries.
+  // Load recent activity feed from accepted friends only.
   useEffect(() => {
     if (!db) {
       setActivities([])
@@ -729,17 +729,50 @@ export default function Dashboard({ profile, onLogout }) {
       return
     }
     const myUid = profile?.userId || profile?.username || null
+    if (!myUid) {
+      setActivities([])
+      setActivitiesLoading(false)
+      return
+    }
     let cancelled = false
     ;(async () => {
       try {
-        // Fetch more than 5 so we still have 5 after filtering ourselves out.
+        // 1) Build accepted-friends UID set (both directions).
+        const [fromSnap, toSnap] = await Promise.all([
+          getDocs(
+            query(
+              collection(db, 'friend_requests'),
+              where('fromUid', '==', myUid),
+              where('status', '==', 'accepted'),
+            ),
+          ),
+          getDocs(
+            query(
+              collection(db, 'friend_requests'),
+              where('toUid', '==', myUid),
+              where('status', '==', 'accepted'),
+            ),
+          ),
+        ])
+
+        const friendUids = new Set([
+          ...fromSnap.docs.map((d) => d.data()?.toUid).filter(Boolean),
+          ...toSnap.docs.map((d) => d.data()?.fromUid).filter(Boolean),
+        ])
+
+        if (friendUids.size === 0) {
+          if (!cancelled) setActivities([])
+          return
+        }
+
+        // 2) Pull recent activities and keep only accepted friends.
         const snap = await getDocs(
-          query(collection(db, 'activities'), orderBy('createdAt', 'desc'), limit(20)),
+          query(collection(db, 'activities'), orderBy('createdAt', 'desc'), limit(60)),
         )
         if (cancelled) return
         const items = snap.docs
           .map((d) => ({ id: d.id, ...d.data() }))
-          .filter((a) => !myUid || a.uid !== myUid)
+          .filter((a) => friendUids.has(a.uid))
           .slice(0, 5)
         setActivities(items)
       } catch (err) {
