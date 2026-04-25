@@ -1,8 +1,14 @@
 import { NextResponse } from 'next/server'
 
+// Groq is the primary provider — ~840 tokens/sec, free tier, OpenAI-compatible.
+const GROQ_API = 'https://api.groq.com/openai/v1/chat/completions'
+const GROQ_MODEL = 'llama-3.1-8b-instant'
+
+// HackClub is kept as a fallback when GROQ_API_KEY is not set.
 const HACKCLUB_API = 'https://ai.hackclub.com/proxy/v1/chat/completions'
-const MODEL = 'qwen/qwen3-32b'
-const AI_TIMEOUT_MS = 32000
+const HACKCLUB_MODEL = 'qwen/qwen3-32b'
+
+const AI_TIMEOUT_MS = 20000
 
 function compactProfile(profile) {
   return {
@@ -231,16 +237,23 @@ export async function POST(request) {
       return NextResponse.json({ error: 'Missing required fields.' }, { status: 400 })
     }
 
-    const apiKey = process.env.HACKCLUB_AI_API_KEY
-    if (!apiKey) {
-      console.warn('HACKCLUB_AI_API_KEY not set — returning fallback lesson.')
+    const groqKey = process.env.GROQ_API_KEY
+    const hackclubKey = process.env.HACKCLUB_AI_API_KEY
+
+    if (!groqKey && !hackclubKey) {
+      console.warn('No AI API key set — returning fallback lesson.')
       return NextResponse.json({ lesson: fallbackLesson(selectedTopic, selectedSubject, profile) })
     }
+
+    const useGroq = !!groqKey
+    const apiKey = useGroq ? groqKey : hackclubKey
+    const apiUrl = useGroq ? GROQ_API : HACKCLUB_API
+    const model = useGroq ? GROQ_MODEL : HACKCLUB_MODEL
 
     async function requestLesson({ compact = false }) {
       const controller = new AbortController()
       timeoutId = setTimeout(() => controller.abort(), AI_TIMEOUT_MS)
-      const aiResponse = await fetch(HACKCLUB_API, {
+      const aiResponse = await fetch(apiUrl, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${apiKey}`,
@@ -248,7 +261,7 @@ export async function POST(request) {
         },
         signal: controller.signal,
         body: JSON.stringify({
-          model: MODEL,
+          model,
           messages: [
             {
               role: 'system',

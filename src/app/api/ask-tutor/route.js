@@ -1,8 +1,12 @@
 import { NextResponse } from 'next/server'
 
+const GROQ_API = 'https://api.groq.com/openai/v1/chat/completions'
+const GROQ_MODEL = 'llama-3.1-8b-instant'
+
 const HACKCLUB_API = 'https://ai.hackclub.com/proxy/v1/chat/completions'
-const MODEL = 'qwen/qwen3-32b'
-const AI_TIMEOUT_MS = 12000
+const HACKCLUB_MODEL = 'qwen/qwen3-32b'
+
+const AI_TIMEOUT_MS = 10000
 
 function buildSystemPrompt({ profile, selectedClass, selectedSubject, selectedTopic, lesson }) {
   const style = profile?.learning_style || 'mixed'
@@ -37,17 +41,24 @@ export async function POST(request) {
       return NextResponse.json({ error: 'Missing question or topic.' }, { status: 400 })
     }
 
-    const apiKey = process.env.HACKCLUB_AI_API_KEY
-    if (!apiKey) {
+    const groqKey = process.env.GROQ_API_KEY
+    const hackclubKey = process.env.HACKCLUB_AI_API_KEY
+
+    if (!groqKey && !hackclubKey) {
       return NextResponse.json({
-        answer: `Great question about ${selectedTopic}! (AI is not configured yet — set HACKCLUB_AI_API_KEY to get a real answer.)`,
+        answer: `Great question about ${selectedTopic}! (Set GROQ_API_KEY or HACKCLUB_AI_API_KEY to get a real answer.)`,
       })
     }
+
+    const useGroq = !!groqKey
+    const apiKey = useGroq ? groqKey : hackclubKey
+    const apiUrl = useGroq ? GROQ_API : HACKCLUB_API
+    const model = useGroq ? GROQ_MODEL : HACKCLUB_MODEL
 
     const controller = new AbortController()
     timeoutId = setTimeout(() => controller.abort(), AI_TIMEOUT_MS)
 
-    const aiResponse = await fetch(HACKCLUB_API, {
+    const aiResponse = await fetch(apiUrl, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${apiKey}`,
@@ -55,7 +66,7 @@ export async function POST(request) {
       },
       signal: controller.signal,
       body: JSON.stringify({
-        model: MODEL,
+        model,
         messages: [
           {
             role: 'system',
